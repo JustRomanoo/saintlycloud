@@ -13,12 +13,16 @@ const IS_DEV = process.env.NODE_ENV !== 'production';
 
 app.set('trust proxy', 1);
 
-const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5174,http://localhost:4173,http://localhost:3721')
+const defaultOrigins = IS_DEV
+  ? 'http://localhost:5174,http://localhost:4173,http://localhost:3721,http://tauri.localhost,https://tauri.localhost,tauri://localhost,https://saintlycloud.vercel.app'
+  : 'http://tauri.localhost,https://tauri.localhost,tauri://localhost,https://saintlycloud.vercel.app';
+
+const allowedOrigins = (process.env.CORS_ORIGIN || defaultOrigins)
   .split(',').map(s => s.trim()).filter(Boolean);
 
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
+    if (!origin || origin === 'null' || origin.startsWith('tauri://') || origin.startsWith('http://tauri.localhost') || origin.startsWith('https://tauri.localhost') || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
       console.warn(`[CORS] Blocked origin: ${origin}`);

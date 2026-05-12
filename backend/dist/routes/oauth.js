@@ -1,16 +1,19 @@
-import { Router } from 'express';
-import { validateCredentials, storeOAuthToken, getOAuthToken, cloudIdPattern } from '../db.js';
-export const oauthRouter = Router();
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.oauthRouter = void 0;
+const express_1 = require("express");
+const db_js_1 = require("../db.js");
+exports.oauthRouter = (0, express_1.Router)();
 function ok(res, data) {
     return res.json({ success: true, ...data });
 }
 function fail(res, status, error, details) {
     return res.status(status).json({ success: false, error, details });
 }
-oauthRouter.post('/oauth/store', (req, res) => {
+exports.oauthRouter.post('/oauth/store', (req, res) => {
     try {
         const { cloudId, secret, accessToken, username } = req.body;
-        if (!cloudId || typeof cloudId !== 'string' || !cloudIdPattern().test(cloudId)) {
+        if (!cloudId || typeof cloudId !== 'string' || !(0, db_js_1.cloudIdPattern)().test(cloudId)) {
             return fail(res, 400, 'Valid cloudId is required (format: SA-CLD-XXXXXXXX)');
         }
         if (!secret || typeof secret !== 'string') {
@@ -22,35 +25,77 @@ oauthRouter.post('/oauth/store', (req, res) => {
         if (!username || typeof username !== 'string') {
             return fail(res, 400, 'username is required');
         }
-        if (!validateCredentials(cloudId, secret)) {
+        if (!(0, db_js_1.validateCredentials)(cloudId, secret)) {
             return fail(res, 401, 'Invalid credentials');
         }
-        storeOAuthToken(cloudId, accessToken, username);
+        (0, db_js_1.storeOAuthToken)(cloudId, accessToken, username);
         return ok(res, { stored: true });
     }
     catch (err) {
         return fail(res, 500, 'Failed to store OAuth token', err.message);
     }
 });
-oauthRouter.get('/oauth/token', (req, res) => {
+exports.oauthRouter.get('/oauth/token', (req, res) => {
     try {
         const cloudId = req.query.cloudId;
         const secret = req.headers['x-secret'];
-        if (!cloudId || typeof cloudId !== 'string' || !cloudIdPattern().test(cloudId)) {
+        if (!cloudId || typeof cloudId !== 'string' || !(0, db_js_1.cloudIdPattern)().test(cloudId)) {
             return fail(res, 400, 'Valid cloudId is required (format: SA-CLD-XXXXXXXX)');
         }
         if (!secret || typeof secret !== 'string') {
             return fail(res, 400, 'x-secret header is required');
         }
-        if (!validateCredentials(cloudId, secret)) {
+        if (!(0, db_js_1.validateCredentials)(cloudId, secret)) {
             return fail(res, 401, 'Invalid credentials');
         }
-        const token = getOAuthToken(cloudId);
+        const token = (0, db_js_1.getOAuthToken)(cloudId);
         if (!token)
             return fail(res, 404, 'No OAuth token stored');
         return ok(res, token);
     }
     catch (err) {
         return fail(res, 500, 'Failed to retrieve OAuth token', err.message);
+    }
+});
+exports.oauthRouter.post('/oauth/init', (req, res) => {
+    try {
+        const { cloudId, secret } = req.body;
+        if (!cloudId || typeof cloudId !== 'string' || !(0, db_js_1.cloudIdPattern)().test(cloudId)) {
+            return fail(res, 400, 'Valid cloudId is required (format: SA-CLD-XXXXXXXX)');
+        }
+        if (!secret || typeof secret !== 'string') {
+            return fail(res, 400, 'secret is required');
+        }
+        if (!(0, db_js_1.validateCredentials)(cloudId, secret)) {
+            return fail(res, 401, 'Invalid credentials');
+        }
+        const initToken = (0, db_js_1.createOAuthInitToken)(cloudId);
+        return ok(res, { initToken });
+    }
+    catch (err) {
+        return fail(res, 500, 'Failed to create OAuth init token', err.message);
+    }
+});
+exports.oauthRouter.post('/oauth/complete', (req, res) => {
+    try {
+        const { initToken, accessToken, username } = req.body;
+        if (!initToken || typeof initToken !== 'string') {
+            return fail(res, 400, 'initToken is required');
+        }
+        if (!accessToken || typeof accessToken !== 'string') {
+            return fail(res, 400, 'accessToken is required');
+        }
+        if (!username || typeof username !== 'string') {
+            return fail(res, 400, 'username is required');
+        }
+        const cloudId = (0, db_js_1.consumeOAuthInitToken)(initToken);
+        if (!cloudId) {
+            return fail(res, 401, 'Invalid or expired init token. Please start the OAuth process again from the desktop app.');
+        }
+        (0, db_js_1.storeOAuthToken)(cloudId, accessToken, username);
+        return ok(res, { stored: true, cloudId });
+    }
+    catch (err) {
+        return fail(res, 500, 'Failed to complete OAuth', err.message);
     }
 });

@@ -1,6 +1,9 @@
-import { Router } from 'express';
-import { validateCredentials, getDevices, removeDevice, renameDevice, cloudIdPattern } from '../db.js';
-export const devicesRouter = Router();
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.devicesRouter = void 0;
+const express_1 = require("express");
+const db_js_1 = require("../db.js");
+exports.devicesRouter = (0, express_1.Router)();
 function ok(res, data) {
     return res.json({ success: true, ...data });
 }
@@ -10,7 +13,7 @@ function fail(res, status, error, details) {
 function assertAuth(req, res) {
     const cloudId = req.body.cloudId || req.query.cloudId;
     const secret = req.body.secret || req.headers['x-secret'];
-    if (!cloudId || typeof cloudId !== 'string' || !cloudIdPattern().test(cloudId)) {
+    if (!cloudId || typeof cloudId !== 'string' || !(0, db_js_1.cloudIdPattern)().test(cloudId)) {
         fail(res, 400, 'Valid cloudId is required (format: SA-CLD-XXXXXXXX)');
         return null;
     }
@@ -18,25 +21,25 @@ function assertAuth(req, res) {
         fail(res, 400, 'secret or x-secret header is required');
         return null;
     }
-    if (!validateCredentials(cloudId, secret)) {
+    if (!(0, db_js_1.validateCredentials)(cloudId, secret)) {
         fail(res, 401, 'Invalid credentials');
         return null;
     }
     return cloudId;
 }
-devicesRouter.get('/devices', (req, res) => {
+exports.devicesRouter.get('/devices', (req, res) => {
     try {
         const cloudId = assertAuth(req, res);
         if (!cloudId)
             return;
-        const devices = getDevices(cloudId);
+        const devices = (0, db_js_1.getDevices)(cloudId);
         return ok(res, { devices });
     }
     catch (err) {
         return fail(res, 500, 'Failed to get devices', err.message);
     }
 });
-devicesRouter.post('/devices/remove', (req, res) => {
+exports.devicesRouter.post('/devices/remove', (req, res) => {
     try {
         const cloudId = assertAuth(req, res);
         if (!cloudId)
@@ -45,7 +48,7 @@ devicesRouter.post('/devices/remove', (req, res) => {
         if (!deviceId || typeof deviceId !== 'string') {
             return fail(res, 400, 'deviceId is required and must be a string');
         }
-        const success = removeDevice(cloudId, deviceId);
+        const success = (0, db_js_1.removeDevice)(cloudId, deviceId);
         if (!success)
             return fail(res, 404, 'Device not found');
         return ok(res, {});
@@ -54,7 +57,7 @@ devicesRouter.post('/devices/remove', (req, res) => {
         return fail(res, 500, 'Failed to remove device', err.message);
     }
 });
-devicesRouter.post('/devices/rename', (req, res) => {
+exports.devicesRouter.post('/devices/rename', (req, res) => {
     try {
         const cloudId = assertAuth(req, res);
         if (!cloudId)
@@ -69,7 +72,7 @@ devicesRouter.post('/devices/rename', (req, res) => {
         if (name.length > 100) {
             return fail(res, 400, 'name must be at most 100 characters');
         }
-        const success = renameDevice(cloudId, deviceId, name.trim());
+        const success = (0, db_js_1.renameDevice)(cloudId, deviceId, name.trim());
         if (!success)
             return fail(res, 404, 'Device not found');
         return ok(res, {});

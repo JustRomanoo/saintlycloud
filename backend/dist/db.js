@@ -1,12 +1,37 @@
-import Database from 'better-sqlite3';
-import { randomBytes, scryptSync, timingSafeEqual } from 'crypto';
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.initSchema = initSchema;
+exports.cloudIdPattern = cloudIdPattern;
+exports.createUser = createUser;
+exports.validateCredentials = validateCredentials;
+exports.updateDeviceActivity = updateDeviceActivity;
+exports.linkDevice = linkDevice;
+exports.getDevices = getDevices;
+exports.removeDevice = removeDevice;
+exports.renameDevice = renameDevice;
+exports.pushData = pushData;
+exports.pullData = pullData;
+exports.recoverAccount = recoverAccount;
+exports.getAccountInfo = getAccountInfo;
+exports.regenerateCredentials = regenerateCredentials;
+exports.getRecoveryCodeByCloudId = getRecoveryCodeByCloudId;
+exports.isCloudIdTaken = isCloudIdTaken;
+exports.createOAuthInitToken = createOAuthInitToken;
+exports.consumeOAuthInitToken = consumeOAuthInitToken;
+exports.storeOAuthToken = storeOAuthToken;
+exports.getOAuthToken = getOAuthToken;
+const better_sqlite3_1 = __importDefault(require("better-sqlite3"));
+const crypto_1 = require("crypto");
 const DB_PATH = process.env.DATABASE_PATH || process.env.DB_PATH || './saintlycloud.db';
-const db = new Database(DB_PATH);
+const db = new better_sqlite3_1.default(DB_PATH);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 function hashSecret(secret) {
-    const salt = randomBytes(16).toString('hex');
-    const hash = scryptSync(secret, salt, 64).toString('hex');
+    const salt = (0, crypto_1.randomBytes)(16).toString('hex');
+    const hash = (0, crypto_1.scryptSync)(secret, salt, 64).toString('hex');
     return `${salt}:${hash}`;
 }
 function verifySecret(secret, stored) {
@@ -15,24 +40,24 @@ function verifySecret(secret, stored) {
         if (parts.length !== 2)
             return false;
         const [salt, key] = parts;
-        const hash = scryptSync(secret, salt, 64).toString('hex');
-        return hash.length === key.length && timingSafeEqual(Buffer.from(hash), Buffer.from(key));
+        const hash = (0, crypto_1.scryptSync)(secret, salt, 64).toString('hex');
+        return hash.length === key.length && (0, crypto_1.timingSafeEqual)(Buffer.from(hash), Buffer.from(key));
     }
     catch {
         return false;
     }
 }
 function generateCloudId() {
-    const raw = randomBytes(4).toString('hex').toUpperCase();
+    const raw = (0, crypto_1.randomBytes)(4).toString('hex').toUpperCase();
     return `SA-CLD-${raw}`;
 }
 function generateRecoveryCode() {
-    const seg1 = randomBytes(3).toString('hex');
-    const seg2 = randomBytes(3).toString('hex');
-    const seg3 = randomBytes(3).toString('hex');
+    const seg1 = (0, crypto_1.randomBytes)(3).toString('hex');
+    const seg2 = (0, crypto_1.randomBytes)(3).toString('hex');
+    const seg3 = (0, crypto_1.randomBytes)(3).toString('hex');
     return `${seg1}-${seg2}-${seg3}`;
 }
-export function initSchema() {
+function initSchema() {
     db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       cloudId TEXT PRIMARY KEY,
@@ -73,10 +98,10 @@ export function initSchema() {
     );
   `);
 }
-export function cloudIdPattern() {
+function cloudIdPattern() {
     return /^SA-CLD-[A-F0-9]{8}$/;
 }
-export function createUser(secret) {
+function createUser(secret) {
     const cloudId = generateCloudId();
     const recoveryCode = generateRecoveryCode();
     const hashed = hashSecret(secret);
@@ -91,13 +116,13 @@ export function createUser(secret) {
     tx();
     return { cloudId, recoveryCode };
 }
-export function validateCredentials(cloudId, secret) {
+function validateCredentials(cloudId, secret) {
     const row = db.prepare('SELECT secret FROM users WHERE cloudId = ?').get(cloudId);
     if (!row)
         return false;
     return verifySecret(secret, row.secret);
 }
-export function updateDeviceActivity(cloudId, deviceId) {
+function updateDeviceActivity(cloudId, deviceId) {
     if (deviceId) {
         db.prepare("UPDATE devices SET lastActive = datetime('now') WHERE deviceId = ? AND cloudId = ?").run(deviceId, cloudId);
     }
@@ -105,7 +130,7 @@ export function updateDeviceActivity(cloudId, deviceId) {
         db.prepare("UPDATE devices SET lastActive = datetime('now') WHERE cloudId = ?").run(cloudId);
     }
 }
-export function linkDevice(cloudId, deviceId, deviceName) {
+function linkDevice(cloudId, deviceId, deviceName) {
     const exists = db.prepare('SELECT 1 FROM users WHERE cloudId = ?').get(cloudId);
     if (!exists)
         return false;
@@ -116,18 +141,18 @@ export function linkDevice(cloudId, deviceId, deviceName) {
   `).run(deviceId, cloudId, deviceName || 'Unknown Device', deviceName || null);
     return true;
 }
-export function getDevices(cloudId) {
+function getDevices(cloudId) {
     return db.prepare('SELECT deviceId, name, lastActive FROM devices WHERE cloudId = ? ORDER BY lastActive DESC').all(cloudId);
 }
-export function removeDevice(cloudId, deviceId) {
+function removeDevice(cloudId, deviceId) {
     const result = db.prepare('DELETE FROM devices WHERE cloudId = ? AND deviceId = ?').run(cloudId, deviceId);
     return result.changes > 0;
 }
-export function renameDevice(cloudId, deviceId, name) {
+function renameDevice(cloudId, deviceId, name) {
     const result = db.prepare('UPDATE devices SET name = ? WHERE cloudId = ? AND deviceId = ?').run(name, cloudId, deviceId);
     return result.changes > 0;
 }
-export function pushData(cloudId, data) {
+function pushData(cloudId, data) {
     const existing = db.prepare('SELECT bookmarks, history, profile, updatedAt FROM user_data WHERE cloudId = ?').get(cloudId);
     if (!existing)
         return false;
@@ -147,7 +172,7 @@ export function pushData(cloudId, data) {
     updateDeviceActivity(cloudId);
     return true;
 }
-export function pullData(cloudId) {
+function pullData(cloudId) {
     const row = db.prepare('SELECT bookmarks, history, profile, updatedAt FROM user_data WHERE cloudId = ?').get(cloudId);
     if (!row)
         return null;
@@ -158,7 +183,7 @@ export function pullData(cloudId) {
         updatedAt: row.updatedAt,
     };
 }
-export function recoverAccount(recoveryCode, newSecret) {
+function recoverAccount(recoveryCode, newSecret) {
     const row = db.prepare(`
     SELECT u.cloudId FROM users u JOIN recovery_codes r ON u.cloudId = r.cloudId WHERE r.code = ?
   `).get(recoveryCode);
@@ -168,31 +193,50 @@ export function recoverAccount(recoveryCode, newSecret) {
     db.prepare('UPDATE users SET secret = ? WHERE cloudId = ?').run(hashed, row.cloudId);
     return { cloudId: row.cloudId };
 }
-export function getAccountInfo(cloudId) {
+function getAccountInfo(cloudId) {
     return db.prepare('SELECT cloudId, createdAt FROM users WHERE cloudId = ?').get(cloudId);
 }
-export function regenerateCredentials(cloudId, oldSecret, newSecret) {
+function regenerateCredentials(cloudId, oldSecret, newSecret) {
     if (!validateCredentials(cloudId, oldSecret))
         return false;
     const hashed = hashSecret(newSecret);
     db.prepare('UPDATE users SET secret = ? WHERE cloudId = ?').run(hashed, cloudId);
     return true;
 }
-export function getRecoveryCodeByCloudId(cloudId) {
+function getRecoveryCodeByCloudId(cloudId) {
     const row = db.prepare('SELECT code FROM recovery_codes WHERE cloudId = ?').get(cloudId);
     return row?.code || null;
 }
-export function isCloudIdTaken(cloudId) {
+function isCloudIdTaken(cloudId) {
     return !!db.prepare('SELECT 1 FROM users WHERE cloudId = ?').get(cloudId);
 }
-export function storeOAuthToken(cloudId, accessToken, username) {
+const oauthInitTokens = new Map();
+const OAUTH_INIT_TTL = 5 * 60 * 1000;
+function createOAuthInitToken(cloudId) {
+    const token = (0, crypto_1.randomBytes)(16).toString('hex');
+    oauthInitTokens.set(token, { cloudId, createdAt: Date.now() });
+    setTimeout(() => oauthInitTokens.delete(token), OAUTH_INIT_TTL);
+    return token;
+}
+function consumeOAuthInitToken(token) {
+    const entry = oauthInitTokens.get(token);
+    if (!entry)
+        return null;
+    if (Date.now() - entry.createdAt > OAUTH_INIT_TTL) {
+        oauthInitTokens.delete(token);
+        return null;
+    }
+    oauthInitTokens.delete(token);
+    return entry.cloudId;
+}
+function storeOAuthToken(cloudId, accessToken, username) {
     db.prepare(`
     INSERT INTO oauth_tokens (cloudId, accessToken, username)
     VALUES (?, ?, ?)
     ON CONFLICT(cloudId) DO UPDATE SET accessToken = excluded.accessToken, username = excluded.username
   `).run(cloudId, accessToken, username);
 }
-export function getOAuthToken(cloudId) {
+function getOAuthToken(cloudId) {
     const row = db.prepare('SELECT accessToken, username FROM oauth_tokens WHERE cloudId = ?').get(cloudId);
     return row || null;
 }
@@ -204,4 +248,4 @@ function safeJsonParse(text, fallback) {
         return fallback;
     }
 }
-export default db;
+exports.default = db;

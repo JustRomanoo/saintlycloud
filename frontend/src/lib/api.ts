@@ -1,13 +1,62 @@
-const API = import.meta.env.VITE_API_URL || '/api';
+function getDefaultApiBase(): string {
+  if (typeof window === 'undefined') return '/api';
+  if (window.location.hostname === 'localhost') return '/api';
+  return 'https://saintlycloud-production.up.railway.app/api';
+}
+
+const API = import.meta.env.VITE_API_URL || getDefaultApiBase();
+
+function getFallbackApiBase(primary: string): string | null {
+  if (typeof window === 'undefined') return null;
+  if (window.location.hostname === 'localhost') return null;
+  if (primary.startsWith('http')) return '/api';
+  return 'https://saintlycloud-production.up.railway.app/api';
+}
 
 async function jsonFetch(url: string, options?: RequestInit): Promise<any> {
-  const res = await fetch(`${API}${url}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-  return data;
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(options?.headers || {}),
+  };
+
+  async function attempt(base: string): Promise<any> {
+    let res: Response;
+    try {
+      res = await fetch(`${base}${url}`, {
+        ...options,
+        headers,
+      });
+    } catch {
+      throw new Error('FETCH_FAILED');
+    }
+
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      throw new Error('NOT_JSON');
+    }
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Request failed. Please try again.');
+    return data;
+  }
+
+  const primary = API;
+  const fallback = getFallbackApiBase(primary);
+
+  try {
+    return await attempt(primary);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : '';
+    if ((msg === 'FETCH_FAILED' || msg === 'NOT_JSON') && fallback && fallback !== primary) {
+      try {
+        return await attempt(fallback);
+      } catch {
+        throw new Error('Cannot connect right now. Please try again.');
+      }
+    }
+    if (msg === 'FETCH_FAILED') throw new Error('Cannot connect right now. Please try again.');
+    if (msg === 'NOT_JSON') throw new Error('Service temporarily unavailable. Please try again.');
+    throw err;
+  }
 }
 
 export interface CloudSession {
