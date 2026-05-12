@@ -4,8 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "start": "ts-node src/index.ts",
-    "postinstall": "npm run build"
+    "start": "ts-node src/index.ts"
   },
   "engines": {
     "node": ">=18.0.0"
