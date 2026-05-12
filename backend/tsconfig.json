@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "target": "ES2022", "module": "ESNext", "moduleResolution": "bundler",
+    "target": "ES2022", "module": "CommonJS", "moduleResolution": "bundler",
     "outDir": "dist", "rootDir": "src", "strict": true, "esModuleInterop": true,
     "skipLibCheck": true, "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true
