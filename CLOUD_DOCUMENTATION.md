@@ -392,11 +392,37 @@ Retrieve the recovery code (requires `x-secret` header).
 
 ### Health
 
+Two health endpoints are available. Use `/health` for simple monitoring/liveness checks, and `/api/health` for detailed diagnostics including uptime and version info.
+
 #### `GET /health`
+
+Minimal liveness check — no authentication required. Returns instantly regardless of database state. Suitable for load balancers, container orchestrators, and uptime monitors.
 
 **Response:**
 ```json
-{ "success": true, "status": "ok", "service": "saintlycloud", "version": "1.1.0" }
+{
+  "status": "ok",
+  "service": "saintlycloud",
+  "timestamp": "2026-05-12T17:30:00.000Z"
+}
+```
+
+#### `GET /api/health`
+
+Detailed health check — includes version, uptime, and environment metadata. Useful for deployment verification and debugging.
+
+**Response:**
+```json
+{
+  "success": true,
+  "status": "ok",
+  "service": "saintlycloud",
+  "version": "1.1.0",
+  "uptime": 3600,
+  "environment": "production",
+  "timestamp": "2026-05-12T17:30:00.000Z"
+}
+```
 
 ---
 

@@ -52,10 +52,13 @@ if (IS_DEV) {
 
 initSchema();
 
-app.use('/api', authRouter);
-app.use('/api', syncRouter);
-app.use('/api', devicesRouter);
-app.use('/api', oauthRouter);
+app.get('/health', (_req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'saintlycloud',
+    timestamp: new Date().toISOString(),
+  });
+});
 
 app.get('/api/health', (_req, res) => {
   res.json({
@@ -65,8 +68,14 @@ app.get('/api/health', (_req, res) => {
     version: '1.1.0',
     uptime: Math.floor((Date.now() - startTime) / 1000),
     environment: IS_DEV ? 'development' : 'production',
+    timestamp: new Date().toISOString(),
   });
 });
+
+app.use('/api', authRouter);
+app.use('/api', syncRouter);
+app.use('/api', devicesRouter);
+app.use('/api', oauthRouter);
 
 app.use((err: any, _req: any, res: any, _next: any) => {
   console.error(`[ERROR] ${err.message || 'Unknown error'}`);
