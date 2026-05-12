@@ -17,6 +17,7 @@
     "express": "^4.21.0",
     "express-rate-limit": "^7.5.0",
     "ts-node": "^10.9.2",
+    "typescript": "^5.9.3",
     "uuid": "^10.0.0"
   },
   "devDependencies": {
@@ -24,7 +25,6 @@
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
     "@types/uuid": "^10.0.0",
-    "tsx": "^4.19.0",
-    "typescript": "^5.9.3"
+    "tsx": "^4.19.0"
   }
 }
