@@ -30,6 +30,17 @@ export default function App() {
   const [oauthFlow, setOauthFlow] = useState(false);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const initToken = params.get('init');
+    if (initToken) {
+      sessionStorage.setItem('oauth_init_token', initToken);
+      window.history.replaceState(null, '', window.location.pathname);
+      const redirectUri = `${window.location.origin}/`;
+      const authUrl = `https://anilist.co/api/v2/oauth/authorize?client_id=41199&response_type=token&redirect_uri=${encodeURIComponent(redirectUri)}`;
+      window.location.href = authUrl;
+      return;
+    }
+
     if (window.location.hash.includes('access_token=')) {
       setOauthFlow(true);
     }

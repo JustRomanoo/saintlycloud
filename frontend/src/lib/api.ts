@@ -119,3 +119,10 @@ export async function getOAuthToken(session: CloudSession): Promise<{ accessToke
     headers: { 'Content-Type': 'application/json', 'x-secret': session.secret },
   });
 }
+
+export async function completeOAuth(initToken: string, accessToken: string, username: string): Promise<void> {
+  await jsonFetch('/oauth/complete', {
+    method: 'POST',
+    body: JSON.stringify({ initToken, accessToken, username }),
+  });
+}

@@ -209,6 +209,28 @@ export function isCloudIdTaken(cloudId: string): boolean {
   return !!db.prepare('SELECT 1 FROM users WHERE cloudId = ?').get(cloudId);
 }
 
+const oauthInitTokens = new Map<string, { cloudId: string; createdAt: number }>();
+
+const OAUTH_INIT_TTL = 5 * 60 * 1000;
+
+export function createOAuthInitToken(cloudId: string): string {
+  const token = randomBytes(16).toString('hex');
+  oauthInitTokens.set(token, { cloudId, createdAt: Date.now() });
+  setTimeout(() => oauthInitTokens.delete(token), OAUTH_INIT_TTL);
+  return token;
+}
+
+export function consumeOAuthInitToken(token: string): string | null {
+  const entry = oauthInitTokens.get(token);
+  if (!entry) return null;
+  if (Date.now() - entry.createdAt > OAUTH_INIT_TTL) {
+    oauthInitTokens.delete(token);
+    return null;
+  }
+  oauthInitTokens.delete(token);
+  return entry.cloudId;
+}
+
 export function storeOAuthToken(cloudId: string, accessToken: string, username: string) {
   db.prepare(`
     INSERT INTO oauth_tokens (cloudId, accessToken, username)

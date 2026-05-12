@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { validateCredentials, storeOAuthToken, getOAuthToken, cloudIdPattern } from '../db.js';
+import { validateCredentials, storeOAuthToken, getOAuthToken, cloudIdPattern, createOAuthInitToken, consumeOAuthInitToken } from '../db.js';
 
 export const oauthRouter = Router();
 
@@ -58,5 +58,52 @@ oauthRouter.get('/oauth/token', (req, res) => {
     return ok(res, token);
   } catch (err: any) {
     return fail(res, 500, 'Failed to retrieve OAuth token', err.message);
+  }
+});
+
+oauthRouter.post('/oauth/init', (req, res) => {
+  try {
+    const { cloudId, secret } = req.body;
+
+    if (!cloudId || typeof cloudId !== 'string' || !cloudIdPattern().test(cloudId)) {
+      return fail(res, 400, 'Valid cloudId is required (format: SA-CLD-XXXXXXXX)');
+    }
+    if (!secret || typeof secret !== 'string') {
+      return fail(res, 400, 'secret is required');
+    }
+    if (!validateCredentials(cloudId, secret)) {
+      return fail(res, 401, 'Invalid credentials');
+    }
+
+    const initToken = createOAuthInitToken(cloudId);
+    return ok(res, { initToken });
+  } catch (err: any) {
+    return fail(res, 500, 'Failed to create OAuth init token', err.message);
+  }
+});
+
+oauthRouter.post('/oauth/complete', (req, res) => {
+  try {
+    const { initToken, accessToken, username } = req.body;
+
+    if (!initToken || typeof initToken !== 'string') {
+      return fail(res, 400, 'initToken is required');
+    }
+    if (!accessToken || typeof accessToken !== 'string') {
+      return fail(res, 400, 'accessToken is required');
+    }
+    if (!username || typeof username !== 'string') {
+      return fail(res, 400, 'username is required');
+    }
+
+    const cloudId = consumeOAuthInitToken(initToken);
+    if (!cloudId) {
+      return fail(res, 401, 'Invalid or expired init token. Please start the OAuth process again from the desktop app.');
+    }
+
+    storeOAuthToken(cloudId, accessToken, username);
+    return ok(res, { stored: true, cloudId });
+  } catch (err: any) {
+    return fail(res, 500, 'Failed to complete OAuth', err.message);
   }
 });

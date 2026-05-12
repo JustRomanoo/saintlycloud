@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { CheckCircle2, AlertTriangle } from 'lucide-react';
+import { completeOAuth, storeOAuthToken } from '../lib/api';
 
 interface OAuthCallbackProps {
   onDone: () => void;
@@ -26,13 +27,6 @@ export function OAuthCallback({ onDone }: OAuthCallbackProps) {
         return;
       }
 
-      const saved = sessionStorage.getItem('sc_session');
-      if (!saved) {
-        setStatus('error');
-        setMessage('No active session. Please log into SaintlyCloud first, then try connecting AniList again.');
-        return;
-      }
-
       fetch('https://graphql.anilist.co', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
@@ -47,17 +41,20 @@ export function OAuthCallback({ onDone }: OAuthCallbackProps) {
             return;
           }
 
-          const session = JSON.parse(saved);
-          await fetch(`${import.meta.env.VITE_API_URL || '/api'}/oauth/store`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              cloudId: session.cloudId,
-              secret: session.secret,
-              accessToken,
-              username,
-            }),
-          });
+          const initToken = sessionStorage.getItem('oauth_init_token');
+          if (initToken) {
+            sessionStorage.removeItem('oauth_init_token');
+            await completeOAuth(initToken, accessToken, username);
+          } else {
+            const saved = sessionStorage.getItem('sc_session');
+            if (!saved) {
+              setStatus('error');
+              setMessage('Could not link AniList to your account. Please log into SaintlyCloud first, then try connecting AniList again.');
+              return;
+            }
+            const session = JSON.parse(saved);
+            await storeOAuthToken(session, accessToken, username);
+          }
 
           setStatus('success');
           setMessage(`AniList connected as ${username}! Redirecting...`);
