@@ -4,7 +4,21 @@ function getDefaultApiBase(): string {
   return 'https://saintlycloud-production.up.railway.app/api';
 }
 
-const API = import.meta.env.VITE_API_URL || getDefaultApiBase();
+function normalizeApiBase(input: string): string {
+  const trimmed = (input || '').trim();
+  if (!trimmed) return '/api';
+  if (trimmed.startsWith('/')) return trimmed.replace(/\/+$/, '') || '/api';
+  try {
+    const u = new URL(trimmed);
+    const base = trimmed.replace(/\/+$/, '');
+    if (u.pathname === '/' || u.pathname === '') return `${base}/api`;
+    return base;
+  } catch {
+    return trimmed.replace(/\/+$/, '');
+  }
+}
+
+const API = normalizeApiBase(import.meta.env.VITE_API_URL || getDefaultApiBase());
 
 function getFallbackApiBase(primary: string): string | null {
   if (typeof window === 'undefined') return null;
@@ -20,9 +34,10 @@ async function jsonFetch(url: string, options?: RequestInit): Promise<any> {
   };
 
   async function attempt(base: string): Promise<any> {
+    const normalizedBase = normalizeApiBase(base);
     let res: Response;
     try {
-      res = await fetch(`${base}${url}`, {
+      res = await fetch(`${normalizedBase}${url}`, {
         ...options,
         headers,
       });
@@ -49,8 +64,11 @@ async function jsonFetch(url: string, options?: RequestInit): Promise<any> {
     if ((msg === 'FETCH_FAILED' || msg === 'NOT_JSON') && fallback && fallback !== primary) {
       try {
         return await attempt(fallback);
-      } catch {
-        throw new Error('Cannot connect right now. Please try again.');
+      } catch (fallbackErr: unknown) {
+        const fallbackMsg = fallbackErr instanceof Error ? fallbackErr.message : '';
+        if (fallbackMsg === 'FETCH_FAILED') throw new Error('Cannot connect right now. Please try again.');
+        if (fallbackMsg === 'NOT_JSON') throw new Error('Service temporarily unavailable. Please try again.');
+        throw fallbackErr;
       }
     }
     if (msg === 'FETCH_FAILED') throw new Error('Cannot connect right now. Please try again.');
