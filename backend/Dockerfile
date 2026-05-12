@@ -4,13 +4,10 @@ RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt
 
 WORKDIR /app
 
-COPY package.json package-lock.json* ./
-RUN npm install
-
-COPY tsconfig.json ./
+COPY package.json package-lock.json* tsconfig.json ./
 COPY src/ ./src/
 
-RUN node ./node_modules/typescript/bin/tsc
+RUN npm install
 
 EXPOSE 3721
 
