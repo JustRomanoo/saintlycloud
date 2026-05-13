@@ -671,7 +671,7 @@ Users can trigger AniList sync manually at any time via the **"Sync AniList"** b
 |----------|---------|-------------|
 | `PORT` | `3721` | Backend server port |
 | `NODE_ENV` | `development` | Set to `production` to disable verbose logging |
-| `DATABASE_PATH` | `./saintlycloud.db` | SQLite database file path (alias: `DB_PATH`) |
+| `DATABASE_PATH` | `./saintlycloud.db` | SQLite database file path (alias: `DB_PATH`). **For production, set this to a persistent volume path** (e.g., `/data/saintlycloud.db` on Render, `/app/data/saintlycloud.db` on Railway with volume attached) |
 | `CORS_ORIGIN` | `http://localhost:5174,http://localhost:4173,http://localhost:3721` | Comma-separated allowed CORS origins |
 | `VITE_API_URL` | `/api` | Frontend API base URL (set to backend URL in production) |
 
@@ -825,6 +825,121 @@ SaintlyCloud stores data in the same format as SaintlyAnime's IndexedDB:
 
 ---
 
+## STABILITY FIXES
+
+### Database Path (Persistence)
+
+**Problem:** After deploying updates, existing accounts stopped working because the SQLite database file was lost.
+
+**Solution:**
+- `DATABASE_PATH` is now resolved to an **absolute path** using `path.resolve()` in `db.ts`:
+  ```typescript
+  const DB_PATH = resolve(process.env.DATABASE_PATH || process.env.DB_PATH || './saintlycloud.db');
+  ```
+- On startup, the server logs the resolved path and whether the file exists:
+  ```
+  [DB] Database path: /app/saintlycloud.db
+  [DB] Database file exists: true
+  ```
+- The **health endpoint** (`GET /api/health`) now returns the `database` field showing the active database path
+- `initSchema()` uses `CREATE TABLE IF NOT EXISTS` exclusively — no `DROP TABLE`, no `DELETE FROM`, no schema recreation. Schema creation is a no-op if tables already exist.
+- For production deployments, set `DATABASE_PATH` to a **persistent volume path** (Render persistent disk, Railway volume, etc.)
+- On ephemeral filesystems, data can be restored from any connected client via push — credentials must be re-entered if the DB is lost
+
+### Credential Persistence
+
+**Problem:** Account creation worked but login immediately returned 401.
+
+**Verification:**
+- Secret normalization is applied **consistently** on both create and validate paths:
+  - `normalizeSecret(secret)` trims whitespace
+  - Applied in both `hashSecret()` (during create) and `verifySecret()` (during validate)
+- Secret storage uses **scrypt + random salt** (`salt:hash` format) — never plaintext
+- Verification uses **timingSafeEqual** — constant-time comparison, prevents timing attacks
+- `validateCredentials()` now logs validation results to the console:
+  ```
+  [Auth] User found: SA-CLD-A1B2C3D4
+  [Auth] Validation PASS for SA-CLD-A1B2C3D4
+  ```
+
+### Sync Merge Logic (Push)
+
+**Problem:** Bookmarks and history were **fully replaced** on each push — if device A and device B both pushed, one device's data would completely overwrite the other's based on `updatedAt` timestamp alone.
+
+**Solution — Per-item merge in `pushData()`:**
+
+- **Bookmarks** are merged by `animeId`. For each incoming bookmark:
+  - If it doesn't exist locally → added
+  - If it exists and incoming `lastWatched` >= existing `lastWatched` → updated
+  - Otherwise → existing kept
+  - See `mergeBookmarks()` in `db.ts`
+
+- **History** (continue watching) is merged by `(animeId, episode)` composite key. For each incoming history entry:
+  - If it doesn't exist locally → added
+  - If it exists and incoming `timestamp` >= existing `timestamp` → updated
+  - Otherwise → existing kept
+  - See `mergeHistory()` in `db.ts`
+
+- **Profile** is still fully replaced (single object, no merge needed)
+- The global `updatedAt` timestamp check still prevents **older pushes** from overwriting **newer merged data**
+
+### Continue Watching Sync
+
+**Problem:** Watch progress was not shared between devices.
+
+**Solution:**
+- The `history` array in `user_data` IS the continue watching system
+- Each history entry stores: `{ animeId, animeTitle, animeCover, episode, timestamp }`
+- Push sends the full `history` array → server merges by `(animeId, episode)` using timestamp comparison
+- Pull returns the merged `history` array → client displays "Continue Watching" section
+- Server logs confirm data arrives and is stored:
+  ```
+  [Sync/Push] history: 12 items
+  [Push] Data updated for SA-CLD-A1B2C3D4
+  ```
+
+### Device Linking
+
+**Problem:** `/link-device` could potentially overwrite user data.
+
+**Verification:**
+- `linkDevice()` only operates on the `devices` table — **never touches** `users`, `user_data`, or `recovery_codes`
+- Uses `INSERT ... ON CONFLICT(deviceId) DO UPDATE SET lastActive = datetime('now'), name = COALESCE(?, name)`
+- Only updates the device's `lastActive` timestamp and optionally the device name
+- `updateDeviceActivity()` similarly only updates `lastActive` on devices
+
+### Auth Consistency
+
+All endpoints now use a **consistent authentication pattern**:
+
+| HTTP Method | Auth Mechanism | Endpoints |
+|------------|---------------|-----------|
+| **POST** | Body: `{ cloudId, secret }` | `/validate`, `/link-device`, `/sync/push`, `/devices/remove`, `/devices/rename`, `/oauth/store`, `/oauth/init`, `/oauth/sync`, `/regenerate` |
+| **GET** | Query: `cloudId` + Header: `x-secret` | `/sync/pull`, `/devices`, `/account/:cloudId`, `/recovery-code/:cloudId`, `/oauth/token` |
+
+All auth paths normalize the same way:
+1. `cloudId` is trimmed and uppercased
+2. `secret` is trimmed
+3. Validation goes through `validateCredentials()` → `normalizeCloudId()` + `normalizeSecret()` + `verifySecret()`
+
+### Debug Logging
+
+Console logs added for all critical operations (secrets are NEVER logged):
+
+| Prefix | When |
+|--------|------|
+| `[DB]` | Database path, file existence, schema readiness |
+| `[User]` | Account creation |
+| `[Auth]` | Validation attempts (PASS/FAIL), user lookup |
+| `[Auth/Create]` | Create-account requests |
+| `[Auth/Validate]` | Validate-credential requests |
+| `[Auth/LinkDevice]` | Device linking operations |
+| `[Sync/Push]` | Push requests with item counts |
+| `[Sync/Pull]` | Pull requests with data summary |
+| `[Push]` | updatedAt comparison, merge results |
+
+---
+
 ## SETUP & RUNNING
 
 ### Backend
@@ -869,5 +984,5 @@ VITE_API_URL=https://your-backend.com/api npm run build
 |----------|---------|-------------|
 | `PORT` | `3721` | Backend server port |
 | `NODE_ENV` | `development` | Set to `production` for deployment |
-| `DATABASE_PATH` | `./saintlycloud.db` | SQLite database file path (alias: `DB_PATH`) |
+| `DATABASE_PATH` | `./saintlycloud.db` | SQLite database file path (alias: `DB_PATH`). **Set to a persistent volume path in production** |
 | `CORS_ORIGIN` | `http://localhost:5174,http://localhost:4173,http://localhost:3721` | Comma-separated allowed CORS origins |

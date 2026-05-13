@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.initSchema = initSchema;
 exports.cloudIdPattern = cloudIdPattern;
 exports.createUser = createUser;
+exports.getDbPath = getDbPath;
 exports.validateCredentials = validateCredentials;
 exports.getUserAuthRow = getUserAuthRow;
 exports.updateDeviceActivity = updateDeviceActivity;
@@ -26,7 +27,11 @@ exports.storeOAuthToken = storeOAuthToken;
 exports.getOAuthToken = getOAuthToken;
 const better_sqlite3_1 = __importDefault(require("better-sqlite3"));
 const crypto_1 = require("crypto");
-const DB_PATH = process.env.DATABASE_PATH || process.env.DB_PATH || './saintlycloud.db';
+const path_1 = require("path");
+const fs_1 = require("fs");
+const DB_PATH = (0, path_1.resolve)(process.env.DATABASE_PATH || process.env.DB_PATH || './saintlycloud.db');
+console.log(`[DB] Database path: ${DB_PATH}`);
+console.log(`[DB] Database file exists: ${(0, fs_1.existsSync)(DB_PATH)}`);
 const db = new better_sqlite3_1.default(DB_PATH);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
@@ -121,15 +126,23 @@ function createUser(secret) {
         insertRecovery.run(cloudId, recoveryCode);
     });
     tx();
+    console.log(`[User] Account created: ${cloudId}`);
     return { cloudId, recoveryCode };
+}
+function getDbPath() {
+    return DB_PATH;
 }
 function validateCredentials(cloudId, secret) {
     const normalizedCloudId = normalizeCloudId(cloudId);
     const normalizedSecret = normalizeSecret(secret);
     const row = db.prepare('SELECT secret FROM users WHERE cloudId = ?').get(normalizedCloudId);
-    if (!row)
+    if (!row) {
+        console.log(`[Auth] User not found: ${normalizedCloudId}`);
         return false;
-    return verifySecret(normalizedSecret, row.secret);
+    }
+    const valid = verifySecret(normalizedSecret, row.secret);
+    console.log(`[Auth] Validation result for ${normalizedCloudId}: ${valid ? 'PASS' : 'FAIL'}`);
+    return valid;
 }
 function getUserAuthRow(cloudId) {
     const normalizedCloudId = normalizeCloudId(cloudId);
@@ -170,36 +183,86 @@ function renameDevice(cloudId, deviceId, name) {
     const result = db.prepare('UPDATE devices SET name = ? WHERE cloudId = ? AND deviceId = ?').run(name, normalizedCloudId, deviceId);
     return result.changes > 0;
 }
+function mergeBookmarks(existing, incoming) {
+    if (incoming === undefined)
+        return JSON.stringify(existing);
+    const map = new Map();
+    for (const bm of existing) {
+        if (bm?.animeId)
+            map.set(bm.animeId, bm);
+    }
+    for (const bm of incoming) {
+        if (!bm?.animeId)
+            continue;
+        const existing_bm = map.get(bm.animeId);
+        if (!existing_bm || (bm.lastWatched || 0) >= (existing_bm.lastWatched || 0)) {
+            map.set(bm.animeId, bm);
+        }
+    }
+    return JSON.stringify(Array.from(map.values()));
+}
+function mergeHistory(existing, incoming) {
+    if (incoming === undefined)
+        return JSON.stringify(existing);
+    const map = new Map();
+    for (const h of existing) {
+        if (h?.animeId)
+            map.set(`${h.animeId}-${h.episode}`, h);
+    }
+    for (const h of incoming || []) {
+        if (!h?.animeId)
+            continue;
+        const key = `${h.animeId}-${h.episode}`;
+        const existing_h = map.get(key);
+        if (!existing_h || (h.timestamp || 0) >= (existing_h.timestamp || 0)) {
+            map.set(key, h);
+        }
+    }
+    return JSON.stringify(Array.from(map.values()));
+}
 function pushData(cloudId, data) {
     const normalizedCloudId = normalizeCloudId(cloudId);
     const existing = db.prepare('SELECT bookmarks, history, profile, updatedAt FROM user_data WHERE cloudId = ?').get(normalizedCloudId);
-    if (!existing)
+    if (!existing) {
+        console.log(`[Push] Account not found: ${normalizedCloudId}`);
         return false;
+    }
     if (data.updatedAt && existing.updatedAt) {
         const incoming = new Date(data.updatedAt).getTime();
         const stored = new Date(existing.updatedAt).getTime();
+        console.log(`[Push] updatedAt check: incoming=${incoming} stored=${stored} diff=${incoming - stored}ms`);
         if (incoming < stored) {
+            console.log(`[Push] Skipping — incoming data is older than stored data`);
             return true;
         }
     }
-    const bookmarks = data.bookmarks !== undefined ? JSON.stringify(data.bookmarks) : existing.bookmarks;
-    const history = data.history !== undefined ? JSON.stringify(data.history) : existing.history;
+    const existingBookmarks = safeJsonParse(existing.bookmarks, []);
+    const existingHistory = safeJsonParse(existing.history, []);
+    const bookmarks = mergeBookmarks(existingBookmarks, data.bookmarks);
+    const history = mergeHistory(existingHistory, data.history);
     const profile = data.profile !== undefined ? JSON.stringify(data.profile) : existing.profile;
     db.prepare(`
     UPDATE user_data SET bookmarks = ?, history = ?, profile = ?, updatedAt = datetime('now') WHERE cloudId = ?
   `).run(bookmarks, history, profile, normalizedCloudId);
+    console.log(`[Push] Data updated for ${normalizedCloudId}`);
     updateDeviceActivity(normalizedCloudId);
     return true;
 }
 function pullData(cloudId) {
     const normalizedCloudId = normalizeCloudId(cloudId);
     const row = db.prepare('SELECT bookmarks, history, profile, updatedAt FROM user_data WHERE cloudId = ?').get(normalizedCloudId);
-    if (!row)
+    if (!row) {
+        console.log(`[Pull] No data found for ${normalizedCloudId}`);
         return null;
+    }
+    const bookmarks = safeJsonParse(row.bookmarks, []);
+    const history = safeJsonParse(row.history, []);
+    const profile = safeJsonParse(row.profile, {});
+    console.log(`[Pull] Data retrieved for ${normalizedCloudId}: bookmarks=${bookmarks.length} history=${history.length}`);
     return {
-        bookmarks: safeJsonParse(row.bookmarks, []),
-        history: safeJsonParse(row.history, []),
-        profile: safeJsonParse(row.profile, {}),
+        bookmarks,
+        history,
+        profile,
         updatedAt: row.updatedAt,
     };
 }

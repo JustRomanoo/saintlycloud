@@ -51,6 +51,8 @@ if (IS_DEV) {
     });
 }
 (0, db_js_1.initSchema)();
+console.log(`[DB] Schema initialized — all tables ready`);
+console.log(`[DB] Database location: ${(0, db_js_1.getDbPath)()}`);
 app.get('/health', (_req, res) => {
     res.json({
         status: 'ok',
@@ -66,6 +68,7 @@ app.get('/api/health', (_req, res) => {
         version: '1.1.0',
         uptime: Math.floor((Date.now() - startTime) / 1000),
         environment: IS_DEV ? 'development' : 'production',
+        database: (0, db_js_1.getDbPath)(),
         timestamp: new Date().toISOString(),
     });
 });

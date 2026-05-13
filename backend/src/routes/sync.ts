@@ -17,6 +17,8 @@ syncRouter.post('/sync/push', (req, res) => {
     const normalizedCloudId = typeof cloudId === 'string' ? cloudId.trim().toUpperCase() : cloudId;
     const normalizedSecret = typeof secret === 'string' ? secret.trim() : secret;
 
+    console.log(`[Sync/Push] Request for ${normalizedCloudId}`);
+
     if (!normalizedCloudId || typeof normalizedCloudId !== 'string' || !cloudIdPattern().test(normalizedCloudId)) {
       return fail(res, 400, 'Valid cloudId is required (format: SA-CLD-XXXXXXXX)');
     }
@@ -39,16 +41,19 @@ syncRouter.post('/sync/push', (req, res) => {
           return fail(res, 400, 'Each bookmark must be a JSON object');
         }
       }
+      console.log(`[Sync/Push] bookmarks: ${data.bookmarks.length} items`);
     }
     if (data.history !== undefined) {
       if (!Array.isArray(data.history)) {
         return fail(res, 400, 'data.history must be an array');
       }
+      console.log(`[Sync/Push] history: ${data.history.length} items`);
     }
     if (data.profile !== undefined) {
       if (typeof data.profile !== 'object' || Array.isArray(data.profile)) {
         return fail(res, 400, 'data.profile must be a JSON object');
       }
+      console.log(`[Sync/Push] profile: included`);
     }
 
     const success = pushData(normalizedCloudId, data);
@@ -58,8 +63,10 @@ syncRouter.post('/sync/push', (req, res) => {
 
     const deviceId = req.headers['x-device-id'] as string;
     updateDeviceActivity(normalizedCloudId, deviceId);
+    console.log(`[Sync/Push] Completed for ${normalizedCloudId}`);
     return ok(res, {});
   } catch (err: any) {
+    console.error(`[Sync/Push] Error: ${err.message}`);
     return fail(res, 500, 'Sync push failed', err.message);
   }
 });
@@ -70,6 +77,8 @@ syncRouter.get('/sync/pull', (req, res) => {
     const secretRaw = req.headers['x-secret'] as string;
     const cloudId = typeof cloudIdRaw === 'string' ? cloudIdRaw.trim().toUpperCase() : cloudIdRaw;
     const secret = typeof secretRaw === 'string' ? secretRaw.trim() : secretRaw;
+
+    console.log(`[Sync/Pull] Request for ${cloudId}`);
 
     if (!cloudId || typeof cloudId !== 'string' || !cloudIdPattern().test(cloudId)) {
       return fail(res, 400, 'Valid cloudId is required (format: SA-CLD-XXXXXXXX)');
@@ -96,6 +105,7 @@ syncRouter.get('/sync/pull', (req, res) => {
       updatedAt: data.updatedAt,
     });
   } catch (err: any) {
+    console.error(`[Sync/Pull] Error: ${err.message}`);
     return fail(res, 500, 'Sync pull failed', err.message);
   }
 });

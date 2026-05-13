@@ -1,7 +1,12 @@
 import Database from 'better-sqlite3';
 import { randomBytes, scryptSync, timingSafeEqual } from 'crypto';
+import { resolve } from 'path';
+import { existsSync } from 'fs';
 
-const DB_PATH = process.env.DATABASE_PATH || process.env.DB_PATH || './saintlycloud.db';
+const DB_PATH = resolve(process.env.DATABASE_PATH || process.env.DB_PATH || './saintlycloud.db');
+
+console.log(`[DB] Database path: ${DB_PATH}`);
+console.log(`[DB] Database file exists: ${existsSync(DB_PATH)}`);
 
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
@@ -107,15 +112,25 @@ export function createUser(secret: string): { cloudId: string; recoveryCode: str
   });
   tx();
 
+  console.log(`[User] Account created: ${cloudId}`);
   return { cloudId, recoveryCode };
+}
+
+export function getDbPath(): string {
+  return DB_PATH;
 }
 
 export function validateCredentials(cloudId: string, secret: string): boolean {
   const normalizedCloudId = normalizeCloudId(cloudId);
   const normalizedSecret = normalizeSecret(secret);
   const row = db.prepare('SELECT secret FROM users WHERE cloudId = ?').get(normalizedCloudId) as { secret: string } | undefined;
-  if (!row) return false;
-  return verifySecret(normalizedSecret, row.secret);
+  if (!row) {
+    console.log(`[Auth] User not found: ${normalizedCloudId}`);
+    return false;
+  }
+  const valid = verifySecret(normalizedSecret, row.secret);
+  console.log(`[Auth] Validation result for ${normalizedCloudId}: ${valid ? 'PASS' : 'FAIL'}`);
+  return valid;
 }
 
 export function getUserAuthRow(cloudId: string): { secret: string } | undefined {
@@ -162,27 +177,69 @@ export function renameDevice(cloudId: string, deviceId: string, name: string): b
   return result.changes > 0;
 }
 
+function mergeBookmarks(existing: any[], incoming: any[] | undefined): string {
+  if (incoming === undefined) return JSON.stringify(existing);
+  const map = new Map<string, any>();
+  for (const bm of existing) {
+    if (bm?.animeId) map.set(bm.animeId, bm);
+  }
+  for (const bm of incoming) {
+    if (!bm?.animeId) continue;
+    const existing_bm = map.get(bm.animeId);
+    if (!existing_bm || (bm.lastWatched || 0) >= (existing_bm.lastWatched || 0)) {
+      map.set(bm.animeId, bm);
+    }
+  }
+  return JSON.stringify(Array.from(map.values()));
+}
+
+function mergeHistory(existing: any[], incoming: any[] | undefined): string {
+  if (incoming === undefined) return JSON.stringify(existing);
+  const map = new Map<string, any>();
+  for (const h of existing) {
+    if (h?.animeId) map.set(`${h.animeId}-${h.episode}`, h);
+  }
+  for (const h of incoming || []) {
+    if (!h?.animeId) continue;
+    const key = `${h.animeId}-${h.episode}`;
+    const existing_h = map.get(key);
+    if (!existing_h || (h.timestamp || 0) >= (existing_h.timestamp || 0)) {
+      map.set(key, h);
+    }
+  }
+  return JSON.stringify(Array.from(map.values()));
+}
+
 export function pushData(cloudId: string, data: { bookmarks?: any; history?: any; profile?: any; updatedAt?: string }): boolean {
   const normalizedCloudId = normalizeCloudId(cloudId);
   const existing = db.prepare('SELECT bookmarks, history, profile, updatedAt FROM user_data WHERE cloudId = ?').get(normalizedCloudId) as any;
-  if (!existing) return false;
+  if (!existing) {
+    console.log(`[Push] Account not found: ${normalizedCloudId}`);
+    return false;
+  }
 
   if (data.updatedAt && existing.updatedAt) {
     const incoming = new Date(data.updatedAt).getTime();
     const stored = new Date(existing.updatedAt).getTime();
+    console.log(`[Push] updatedAt check: incoming=${incoming} stored=${stored} diff=${incoming - stored}ms`);
     if (incoming < stored) {
+      console.log(`[Push] Skipping — incoming data is older than stored data`);
       return true;
     }
   }
 
-  const bookmarks = data.bookmarks !== undefined ? JSON.stringify(data.bookmarks) : existing.bookmarks;
-  const history = data.history !== undefined ? JSON.stringify(data.history) : existing.history;
+  const existingBookmarks = safeJsonParse(existing.bookmarks, []);
+  const existingHistory = safeJsonParse(existing.history, []);
+
+  const bookmarks = mergeBookmarks(existingBookmarks, data.bookmarks);
+  const history = mergeHistory(existingHistory, data.history);
   const profile = data.profile !== undefined ? JSON.stringify(data.profile) : existing.profile;
 
   db.prepare(`
     UPDATE user_data SET bookmarks = ?, history = ?, profile = ?, updatedAt = datetime('now') WHERE cloudId = ?
   `).run(bookmarks, history, profile, normalizedCloudId);
 
+  console.log(`[Push] Data updated for ${normalizedCloudId}`);
   updateDeviceActivity(normalizedCloudId);
   return true;
 }
@@ -190,12 +247,21 @@ export function pushData(cloudId: string, data: { bookmarks?: any; history?: any
 export function pullData(cloudId: string) {
   const normalizedCloudId = normalizeCloudId(cloudId);
   const row = db.prepare('SELECT bookmarks, history, profile, updatedAt FROM user_data WHERE cloudId = ?').get(normalizedCloudId) as any;
-  if (!row) return null;
+  if (!row) {
+    console.log(`[Pull] No data found for ${normalizedCloudId}`);
+    return null;
+  }
+
+  const bookmarks = safeJsonParse(row.bookmarks, []);
+  const history = safeJsonParse(row.history, []);
+  const profile = safeJsonParse(row.profile, {});
+
+  console.log(`[Pull] Data retrieved for ${normalizedCloudId}: bookmarks=${bookmarks.length} history=${history.length}`);
 
   return {
-    bookmarks: safeJsonParse(row.bookmarks, []),
-    history: safeJsonParse(row.history, []),
-    profile: safeJsonParse(row.profile, {}),
+    bookmarks,
+    history,
+    profile,
     updatedAt: row.updatedAt,
   };
 }

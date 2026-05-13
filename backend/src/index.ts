@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
-import { initSchema } from './db.js';
+import { initSchema, getDbPath } from './db.js';
 import { authRouter } from './routes/auth.js';
 import { syncRouter } from './routes/sync.js';
 import { devicesRouter } from './routes/devices.js';
@@ -55,6 +55,8 @@ if (IS_DEV) {
 }
 
 initSchema();
+console.log(`[DB] Schema initialized — all tables ready`);
+console.log(`[DB] Database location: ${getDbPath()}`);
 
 app.get('/health', (_req, res) => {
   res.json({
@@ -72,6 +74,7 @@ app.get('/api/health', (_req, res) => {
     version: '1.1.0',
     uptime: Math.floor((Date.now() - startTime) / 1000),
     environment: IS_DEV ? 'development' : 'production',
+    database: getDbPath(),
     timestamp: new Date().toISOString(),
   });
 });

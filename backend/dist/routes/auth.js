@@ -15,6 +15,7 @@ exports.authRouter.post('/create-account', (req, res) => {
         const { deviceId, secret, deviceName } = req.body;
         const normalizedDeviceId = typeof deviceId === 'string' ? deviceId.trim() : deviceId;
         const normalizedSecret = typeof secret === 'string' ? secret.trim() : secret;
+        console.log(`[Auth/Create] Request from device: ${normalizedDeviceId}`);
         if (!normalizedDeviceId || typeof normalizedDeviceId !== 'string') {
             return fail(res, 400, 'deviceId is required and must be a string');
         }
@@ -29,9 +30,11 @@ exports.authRouter.post('/create-account', (req, res) => {
         }
         const { cloudId, recoveryCode } = (0, db_js_1.createUser)(normalizedSecret);
         (0, db_js_1.linkDevice)(cloudId, normalizedDeviceId, typeof deviceName === 'string' ? deviceName.trim().slice(0, 100) : undefined);
+        console.log(`[Auth/Create] Success: ${cloudId}`);
         return ok(res, { cloudId, recoveryCode });
     }
     catch (err) {
+        console.error(`[Auth/Create] Error: ${err.message}`);
         return fail(res, 500, 'Failed to create account', err.message);
     }
 });
@@ -41,6 +44,7 @@ exports.authRouter.post('/link-device', (req, res) => {
         const normalizedCloudId = typeof cloudId === 'string' ? cloudId.trim().toUpperCase() : cloudId;
         const normalizedSecret = typeof secret === 'string' ? secret.trim() : secret;
         const normalizedDeviceId = typeof deviceId === 'string' ? deviceId.trim() : deviceId;
+        console.log(`[Auth/LinkDevice] Linking ${normalizedDeviceId} to ${normalizedCloudId}`);
         if (!normalizedCloudId || typeof normalizedCloudId !== 'string' || !(0, db_js_1.cloudIdPattern)().test(normalizedCloudId)) {
             return fail(res, 400, 'Valid cloudId is required (format: SA-CLD-XXXXXXXX)');
         }
@@ -54,9 +58,11 @@ exports.authRouter.post('/link-device', (req, res) => {
             return fail(res, 401, 'Invalid credentials');
         }
         (0, db_js_1.linkDevice)(normalizedCloudId, normalizedDeviceId, typeof deviceName === 'string' ? deviceName.trim().slice(0, 100) : undefined);
+        console.log(`[Auth/LinkDevice] Success: ${normalizedDeviceId} -> ${normalizedCloudId}`);
         return ok(res, { cloudId: normalizedCloudId });
     }
     catch (err) {
+        console.error(`[Auth/LinkDevice] Error: ${err.message}`);
         return fail(res, 500, 'Failed to link device', err.message);
     }
 });
@@ -65,26 +71,24 @@ exports.authRouter.post('/validate', (req, res) => {
         const { cloudId, secret } = req.body;
         const normalizedCloudId = typeof cloudId === 'string' ? cloudId.trim().toUpperCase() : cloudId;
         const normalizedSecret = typeof secret === 'string' ? secret.trim() : secret;
+        console.log(`[Auth/Validate] Request for ${normalizedCloudId}`);
         if (!normalizedCloudId || typeof normalizedCloudId !== 'string' || !(0, db_js_1.cloudIdPattern)().test(normalizedCloudId)) {
             return fail(res, 400, 'cloudId is required');
         }
         if (!normalizedSecret || typeof normalizedSecret !== 'string') {
             return fail(res, 400, 'secret is required');
         }
-        const isDev = process.env.NODE_ENV !== 'production';
-        if (isDev) {
-            const row = (0, db_js_1.getUserAuthRow)(normalizedCloudId);
-            console.log('Validating cloudId:', normalizedCloudId);
-            console.log('User found:', !!row);
-        }
         const valid = (0, db_js_1.validateCredentials)(normalizedCloudId, normalizedSecret);
         if (!valid) {
+            console.log(`[Auth/Validate] FAILED for ${normalizedCloudId}`);
             return fail(res, 401, 'Invalid credentials');
         }
         const info = (0, db_js_1.getAccountInfo)(normalizedCloudId);
+        console.log(`[Auth/Validate] PASS for ${normalizedCloudId}`);
         return ok(res, { cloudId: info?.cloudId, createdAt: info?.createdAt });
     }
     catch (err) {
+        console.error(`[Auth/Validate] Error: ${err.message}`);
         return fail(res, 500, 'Validation failed', err.message);
     }
 });
