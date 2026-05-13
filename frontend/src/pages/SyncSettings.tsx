@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Upload, Download, CheckCircle } from 'lucide-react';
+import { Upload, Download, CheckCircle, RefreshCw } from 'lucide-react';
 import type { CloudSession } from '../lib/api';
-import { pushData, pullData } from '../lib/api';
+import { pushData, pullData, syncAniList, getOAuthToken } from '../lib/api';
 
 export function SyncSettingsPage({ session }: { session: CloudSession }) {
   const [syncBookmarks, setSyncBookmarks] = useState(true);
@@ -9,6 +9,12 @@ export function SyncSettingsPage({ session }: { session: CloudSession }) {
   const [syncProfile, setSyncProfile] = useState(true);
   const [lastResult, setLastResult] = useState('');
   const [lastError, setLastError] = useState('');
+  const [anilistConnected, setAnilistConnected] = useState(false);
+  const [syncingAnilist, setSyncingAnilist] = useState(false);
+
+  useEffect(() => {
+    getOAuthToken(session).then((t) => setAnilistConnected(!!t)).catch(() => {});
+  }, [session]);
 
   const handlePush = async () => {
     setLastResult('');
@@ -34,6 +40,19 @@ export function SyncSettingsPage({ session }: { session: CloudSession }) {
     } catch (err: any) {
       setLastError(err.message);
     }
+  };
+
+  const handleAnilistSync = async () => {
+    setLastResult('');
+    setLastError('');
+    setSyncingAnilist(true);
+    try {
+      const result = await syncAniList(session);
+      setLastResult(`Synced ${result.count} anime from AniList`);
+    } catch (err: any) {
+      setLastError(err.message);
+    }
+    setSyncingAnilist(false);
   };
 
   return (
@@ -81,6 +100,20 @@ export function SyncSettingsPage({ session }: { session: CloudSession }) {
             <p>{lastError}</p>
           </div>
         )}
+      </div>
+
+      <div className="panel">
+        <p className="section-title">AniList Sync</p>
+        <p className="small-text">
+          {anilistConnected
+            ? 'Import your AniList anime list into SaintlyCloud bookmarks.'
+            : 'Connect your AniList account from the Dashboard to enable sync.'}
+        </p>
+        <div className="filter-group" style={{ marginTop: 10 }}>
+          <button className="btn btn-primary" onClick={handleAnilistSync} disabled={!anilistConnected || syncingAnilist}>
+            <RefreshCw size={16} className={syncingAnilist ? 'spin' : ''} /> {syncingAnilist ? 'Syncing...' : 'Sync AniList'}
+          </button>
+        </div>
       </div>
     </>
   );

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { CheckCircle2, AlertTriangle } from 'lucide-react';
-import { completeOAuth, storeOAuthToken } from '../lib/api';
+import { CheckCircle2, AlertTriangle, RefreshCw } from 'lucide-react';
+import { completeOAuth, storeOAuthToken, syncAniList } from '../lib/api';
 
 interface OAuthCallbackProps {
   onDone: () => void;
@@ -57,11 +57,23 @@ export function OAuthCallback({ onDone }: OAuthCallbackProps) {
           }
 
           setStatus('success');
-          setMessage(`AniList connected as ${username}! Redirecting...`);
+          setMessage(`AniList connected as ${username}! Importing your anime list...`);
+
+          const saved = sessionStorage.getItem('sc_session');
+          if (saved) {
+            const session = JSON.parse(saved);
+            try {
+              const syncResult = await syncAniList(session);
+              setMessage(`AniList connected as ${username}! Imported ${syncResult.count} anime. Redirecting...`);
+            } catch {
+              setMessage(`AniList connected as ${username}, but sync failed. You can retry from Sync Settings.`);
+            }
+          }
+
           setTimeout(() => {
             window.location.hash = '';
             onDone();
-          }, 2000);
+          }, 2500);
         })
         .catch((err) => {
           setStatus('error');

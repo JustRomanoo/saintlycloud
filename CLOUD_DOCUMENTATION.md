@@ -579,14 +579,87 @@ The frontend handles AniList OAuth redirects at `/oauth`:
 1. AniList redirects to `https://your-frontend-domain.com/#access_token=TOKEN`
 2. The `OAuthCallback` page extracts the token from the URL hash
 3. Verifies the token against AniList GraphQL API
-4. Stores the token via `POST /api/oauth/store`
-5. Redirects to the dashboard
+4. Stores the token via `POST /api/oauth/store` or `POST /api/oauth/complete`
+5. **Triggers automatic import** via `POST /api/oauth/sync` — fetches the user's full anime list, transforms it into bookmarks, and stores it in the cloud database
+6. Redirects to the dashboard
 
 **AniList Redirect URI Configuration:**
 ```
 https://your-frontend-domain.com/
 ```
 Note: Use the frontend URL (not the API URL) as the AniList redirect URI. The token is extracted client-side from the URL hash.
+
+### `POST /api/oauth/sync`
+Import the user's AniList anime list into SaintlyCloud bookmarks. Requires a connected AniList account (token stored via `/oauth/store` or `/oauth/complete`).
+
+**Request:**
+```json
+{ "cloudId": "SA-CLD-XXXXXXXX", "secret": "mypassword" }
+```
+
+**Response:**
+```json
+{ "success": true, "synced": true, "count": 42 }
+```
+
+**Errors:** `401` invalid credentials, `404` no AniList token found, `502` AniList API failure
+
+### Sync Flow Details
+
+When `POST /api/oauth/sync` is called:
+
+1. **Authentication** — Validates cloudId + secret credentials
+2. **Token retrieval** — Fetches the stored AniList OAuth access token from the database
+3. **GraphQL query** — Calls `https://graphql.anilist.co` with `Authorization: Bearer <token>` header:
+   ```graphql
+   query {
+     MediaListCollection(type: ANIME) {
+       lists {
+         entries {
+           media {
+             id
+             title { romaji english }
+             coverImage { large }
+             episodes
+           }
+           status
+           progress
+         }
+       }
+     }
+   }
+   ```
+4. **Transformation** — Each AniList entry is converted to the cloud bookmark format:
+   | Field | Source | Example |
+   |-------|--------|---------|
+   | `animeId` | `media.id` (as string) | `"1434"` |
+   | `animeTitle` | `title.english` or `title.romaji` | `"Attack on Titan"` |
+   | `animeCover` | `coverImage.large` | URL string |
+   | `status` | Mapped from AniList status | `"CURRENT"` → `"Watching"` |
+   | `currentEpisode` | `progress` | `12` |
+   | `progress` | `(progress / episodes) * 100` | `60` |
+5. **Status mapping:**
+   | AniList Status | Local Status |
+   |---------------|--------------|
+   | `CURRENT` | `Watching` |
+   | `COMPLETED` | `Completed` |
+   | `PLANNING` | `Planned` |
+   | `DROPPED` | `Dropped` |
+   | `PAUSED` | `On Hold` |
+   | `REPEATING` | `Watching` |
+6. **Storage** — Transformed bookmarks are pushed to the cloud database via `pushData()`, replacing only the bookmark data while preserving existing history and profile
+7. **Response** — Returns `{ success: true, synced: true, count: <number> }`
+
+### Manual Sync
+
+Users can trigger AniList sync manually at any time via the **"Sync AniList"** button on the **Sync Settings** page. This calls the same `POST /api/oauth/sync` endpoint.
+
+### Error Handling
+
+- **No token stored:** Returns `404` with message "No AniList token found. Connect AniList first."
+- **AniList API failure:** Returns `502` with the AniList error body
+- **Failed sync:** Existing bookmarks are never overwritten — the sync only writes on successful completion
+- **On OAuth callback:** If sync fails, the user is notified but can still proceed to the dashboard; retry via Sync Settings
 
 ---
 

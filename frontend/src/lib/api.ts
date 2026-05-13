@@ -193,3 +193,10 @@ export async function completeOAuth(initToken: string, accessToken: string, user
     body: JSON.stringify({ initToken, accessToken, username }),
   });
 }
+
+export async function syncAniList(session: CloudSession): Promise<{ synced: boolean; count: number }> {
+  return jsonFetch('/oauth/sync', {
+    method: 'POST',
+    body: JSON.stringify({ cloudId: session.cloudId, secret: session.secret }),
+  });
+}
