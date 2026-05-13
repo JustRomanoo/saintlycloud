@@ -11,7 +11,7 @@ function fail(res: any, status: number, error: string, details?: string) {
   return res.status(status).json({ success: false, error, details });
 }
 
-function assertAuth(req: any, res: any): string | null {
+async function assertAuth(req: any, res: any): Promise<string | null> {
   const cloudIdRaw = (req.body.cloudId || req.query.cloudId) as any;
   const secretRaw = (req.body.secret || req.headers['x-secret']) as any;
   const cloudId = typeof cloudIdRaw === 'string' ? cloudIdRaw.trim().toUpperCase() : cloudIdRaw;
@@ -24,28 +24,28 @@ function assertAuth(req: any, res: any): string | null {
     fail(res, 400, 'secret or x-secret header is required');
     return null;
   }
-  if (!validateCredentials(cloudId, secret)) {
+  if (!(await validateCredentials(cloudId, secret))) {
     fail(res, 401, 'Invalid credentials');
     return null;
   }
   return cloudId;
 }
 
-devicesRouter.get('/devices', (req, res) => {
+devicesRouter.get('/devices', async (req, res) => {
   try {
-    const cloudId = assertAuth(req, res);
+    const cloudId = await assertAuth(req, res);
     if (!cloudId) return;
 
-    const devices = getDevices(cloudId);
+    const devices = await getDevices(cloudId);
     return ok(res, { devices });
   } catch (err: any) {
     return fail(res, 500, 'Failed to get devices', err.message);
   }
 });
 
-devicesRouter.post('/devices/remove', (req, res) => {
+devicesRouter.post('/devices/remove', async (req, res) => {
   try {
-    const cloudId = assertAuth(req, res);
+    const cloudId = await assertAuth(req, res);
     if (!cloudId) return;
 
     const { deviceId } = req.body;
@@ -53,7 +53,7 @@ devicesRouter.post('/devices/remove', (req, res) => {
       return fail(res, 400, 'deviceId is required and must be a string');
     }
 
-    const success = removeDevice(cloudId, deviceId);
+    const success = await removeDevice(cloudId, deviceId);
     if (!success) return fail(res, 404, 'Device not found');
     return ok(res, {});
   } catch (err: any) {
@@ -61,9 +61,9 @@ devicesRouter.post('/devices/remove', (req, res) => {
   }
 });
 
-devicesRouter.post('/devices/rename', (req, res) => {
+devicesRouter.post('/devices/rename', async (req, res) => {
   try {
-    const cloudId = assertAuth(req, res);
+    const cloudId = await assertAuth(req, res);
     if (!cloudId) return;
 
     const { deviceId, name } = req.body;
@@ -77,7 +77,7 @@ devicesRouter.post('/devices/rename', (req, res) => {
       return fail(res, 400, 'name must be at most 100 characters');
     }
 
-    const success = renameDevice(cloudId, deviceId, name.trim());
+    const success = await renameDevice(cloudId, deviceId, name.trim());
     if (!success) return fail(res, 404, 'Device not found');
     return ok(res, {});
   } catch (err: any) {

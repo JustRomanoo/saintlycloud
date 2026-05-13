@@ -1,8 +1,8 @@
 # SaintlyCloud - Cloud Sync Platform
 
-**Version:** 1.1.0  
-**Status:** Production-Ready, Hardened  
-**Tech Stack:** Node.js + Express + SQLite (backend), React + Vite + TypeScript (frontend)
+**Version:** 1.2.0  
+**Status:** Production-Ready, PostgreSQL  
+**Tech Stack:** Node.js + Express + PostgreSQL (backend), React + Vite + TypeScript (frontend)
 
 ---
 
@@ -33,9 +33,9 @@ SaintlyCloud is a lightweight, credential-based cloud sync platform designed spe
 - **No email/password** — Identity is managed via `cloudId` (public identifier) + `secret` (private key)
 - **No streaming** — The cloud platform never provides or proxies anime streams
 - **Local-first** — All anime playback remains local; cloud only syncs metadata (bookmarks, history, profile)
-- **Minimal surface area** — 5 database tables, 13 API endpoints, 7 frontend pages
-- **Zero-config SQLite** — Backend uses better-sqlite3 for instant setup (swappable to PostgreSQL)
-- **Hashed secrets** — Secrets are hashed with scrypt + random salt before storage; plaintext never persisted
+- **Minimal surface area** — 1 database table, 13 API endpoints, 7 frontend pages
+- **PostgreSQL persistence** — Single `users` table with JSONB `data` column; no file-based storage
+- **Hashed secrets** — Secrets are hashed with bcrypt (cost factor 10) before storage; plaintext never persisted
 - **Conflict-resolved sync** — Timestamp-based conflict resolution prevents older data overwriting newer data
 - **Rate-limited** — Sensitive endpoints protected by rate limiting (5 req/min/IP)
 
@@ -45,7 +45,7 @@ SaintlyCloud is a lightweight, credential-based cloud sync platform designed spe
 SaintlyAnime Desktop  ←→  SaintlyCloud API  ←→  SaintlyCloud Dashboard
        │                        │
        │                        ▼
-       │                 SQLite Database
+        │                 PostgreSQL Database
        │            (bookmarks, history, profile)
        │
        ▼
@@ -102,59 +102,80 @@ saintlycloud/
 
 ## DATABASE SCHEMA
 
+### Single Table Design
+
+SaintlyCloud uses a **single `users` table** with a JSONB `data` column. This eliminates JOINs, simplifies persistence, and ensures atomic updates per user.
+
 ### Table: `users`
 
-| Column    | Type   | Description                                             |
-|-----------|--------|---------------------------------------------------------|
-| cloudId   | TEXT PK | Formatted ID (e.g., `SA-CLD-A1B2C3D4`), public identifier |
-| secret    | TEXT   | Scrypt-hashed secret (salt:hash format, never plaintext)  |
-| createdAt | TEXT   | ISO timestamp of account creation                        |
+| Column     | Type          | Description                                                 |
+|------------|---------------|-------------------------------------------------------------|
+| id         | SERIAL PK     | Auto-incrementing internal ID                               |
+| cloud_id   | TEXT UNIQUE   | Formatted ID (e.g., `SA-CLD-A1B2C3D4`), public identifier  |
+| secret     | TEXT          | bcrypt-hashed secret (cost factor 10, never plaintext)       |
+| data       | JSONB         | All user data: bookmarks, history, profile, devices, etc.   |
+| created_at | TIMESTAMPTZ   | Auto-set on creation (NOW())                                |
 
-### Table: `devices`
+### JSONB `data` Structure
 
-| Column    | Type   | Description                          |
-|-----------|--------|--------------------------------------|
-| deviceId  | TEXT PK | UUID identifying the device          |
-| cloudId   | TEXT FK | References users.cloudId (CASCADE)   |
-| name      | TEXT   | Human-readable device name           |
-| lastActive| TEXT   | ISO timestamp of last activity       |
-
-### Table: `user_data`
-
-| Column    | Type   | Description                          |
-|-----------|--------|--------------------------------------|
-| cloudId   | TEXT PK | References users.cloudId (CASCADE)   |
-| bookmarks | JSONB  | Array of bookmark objects             |
-| history   | JSONB  | Array of watch history entries        |
-| profile   | JSONB  | Single profile object                 |
-| updatedAt | TEXT   | ISO timestamp of last update          |
-
-### Table: `oauth_tokens`
-
-| Column | Type | Description |
-|--------|------|-------------|
-| cloudId | TEXT PK | References users.cloudId (CASCADE) |
-| accessToken | TEXT | AniList OAuth access token |
-| username | TEXT | AniList username |
-| createdAt | TEXT | ISO timestamp of token creation |
-
-### Table: `recovery_codes`
-
-| Column    | Type   | Description                          |
-|-----------|--------|--------------------------------------|
-| cloudId   | TEXT PK | References users.cloudId (CASCADE)   |
-| code      | TEXT   | Recovery code (3 UUID segments joined) |
-
-### Entity Relationships
-
+```json
+{
+  "bookmarks": [
+    {
+      "animeId": "1434",
+      "animeTitle": "Attack on Titan",
+      "animeCover": "https://...",
+      "status": "Watching",
+      "currentEpisode": 12,
+      "lastWatched": 1700000000000,
+      "progress": 60
+    }
+  ],
+  "history": [
+    {
+      "animeId": "1434",
+      "animeTitle": "Attack on Titan",
+      "animeCover": "https://...",
+      "episode": 12,
+      "timestamp": 1700000000000
+    }
+  ],
+  "profile": {
+    "username": "Saintly Viewer",
+    "avatar": "",
+    "banner": "",
+    "frame": "",
+    "accent": "#8a5fff"
+  },
+  "updatedAt": "2026-05-13T12:00:00.000Z",
+  "devices": [
+    {
+      "deviceId": "uuid",
+      "name": "My PC",
+      "lastActive": "2026-05-13T12:00:00.000Z"
+    }
+  ],
+  "recoveryCode": "a1b2c3-d4e5f6-g7h8i9",
+  "oauthToken": {
+    "accessToken": "...",
+    "username": "anilist_user"
+  }
+}
 ```
-users (1) ──→ (N) devices
-users (1) ──→ (1) user_data
-users (1) ──→ (1) recovery_codes
-users (1) ──→ (1) oauth_tokens
-```
 
-All child tables use `ON DELETE CASCADE` — deleting a user removes all associated data.
+### Indexes
+
+- `idx_users_cloud_id` on `cloud_id` — fast lookup by cloud identifier
+
+### Benefits of Single Table Design
+
+| Concern | SQLite (old) | PostgreSQL (new) |
+|---------|-------------|-------------------|
+| Tables | 5 (users, devices, user_data, recovery_codes, oauth_tokens) | 1 (users) |
+| Lookups | JOINs across 5 tables | Single-row SELECT by cloud_id |
+| Writes | 3+ separate INSERTs per account creation | 1 INSERT per account |
+| Data loss | Ephemeral filesystem lost entire DB | Persistent PostgreSQL volume |
+| Atomicity | Requires transactions across statements | Single UPDATE on one row |
 
 ---
 
@@ -438,10 +459,10 @@ SaintlyCloud uses a two-part credential system + recovery code:
 
 ### Rules
 
-- `cloudId` is auto-generated and guaranteed unique (uses `randomBytes` + collision check)
-- `secret` is **never stored in plaintext** — hashed with scrypt + 16-byte random salt using Node.js built-in `crypto.scryptSync`
-- Secret verification uses `timingSafeEqual` to prevent timing attacks
-- `recoveryCode` is generated at account creation and stored in plaintext (only recovery mechanism)
+- `cloudId` is auto-generated and guaranteed unique (uses `randomBytes`)
+- `secret` is **never stored in plaintext** — hashed with **bcrypt** (cost factor 10) using the `bcrypt` npm package
+- Secret verification uses `bcrypt.compare()` — constant-time comparison built into bcrypt
+- `recoveryCode` is generated at account creation and stored in the JSONB `data` field
 - There is no password reset flow without the recovery code
 - Regenerating credentials invalidates the old secret immediately
 
@@ -455,20 +476,20 @@ All credential validation follows this consistent flow:
    - Normalization happens both in route handlers and in `db.ts` utility functions for defense-in-depth
 
 2. **Hashing** (on create/recover/regenerate):
-   - `hashSecret(secret)` generates a 16-byte random salt (`crypto.randomBytes(16).toString('hex')`)
-   - Produces a 64-byte scrypt hash: `crypto.scryptSync(secret, salt, 64).toString('hex')`
-   - Stored as `salt:hash` format
+   - `hashSecret(secret)` calls `bcrypt.hash(normalizedSecret, 10)` — generates a salt and hash in one operation
+   - bcrypt cost factor 10 provides strong protection against brute-force attacks
+   - Stored as a single bcrypt hash string (includes embedded salt)
 
 3. **Verification** (on validate/link-device/sync/devices/oauth):
-   - `verifySecret(secret, stored)` splits stored value by `:` to extract `salt` and `key`
-   - Recomputes hash: `crypto.scryptSync(secret, salt, 64).toString('hex')`
-   - Compares using `crypto.timingSafeEqual` (preceded by length check to avoid allocation errors)
+   - `verifySecret(secret, hash)` calls `bcrypt.compare(normalizedSecret, storedHash)`
+   - bcrypt's built-in constant-time comparison prevents timing attacks
+   - Salt is automatically extracted from the stored hash by bcrypt
 
 4. **Double normalization** — Both route handlers and DB functions normalize independently, ensuring consistency even if one layer changes
 
 5. **What NOT to do:**
    - ❌ Never compare raw secret to hashed string
-   - ❌ Never re-hash and compare hashes (must derive hash from input + stored salt)
+   - ❌ Never re-hash and compare hashes (must use bcrypt.compare)
    - ❌ Never skip normalization on one path but apply it on another
 
 ---
@@ -671,13 +692,17 @@ Users can trigger AniList sync manually at any time via the **"Sync AniList"** b
 |----------|---------|-------------|
 | `PORT` | `3721` | Backend server port |
 | `NODE_ENV` | `development` | Set to `production` to disable verbose logging |
-| `DATABASE_PATH` | `./saintlycloud.db` | SQLite database file path (alias: `DB_PATH`). **For production, set this to a persistent volume path** (e.g., `/data/saintlycloud.db` on Render, `/app/data/saintlycloud.db` on Railway with volume attached) |
+| `DATABASE_URL` | **(required)** | PostgreSQL connection string (e.g., `postgresql://user:pass@host:5432/db`) |
 | `CORS_ORIGIN` | `http://localhost:5174,http://localhost:4173,http://localhost:3721` | Comma-separated allowed CORS origins |
 | `VITE_API_URL` | `/api` | Frontend API base URL (set to backend URL in production) |
 
-### Hosting Backend (Railway / Render / Fly.io)
+### Hosting Backend (Render / Railway / Fly.io)
 
-The backend is a standard Node.js + Express application. SQLite works on all major hosting platforms.
+The backend is a standard Node.js + Express application with PostgreSQL.
+
+**Prerequisites:**
+- A PostgreSQL database instance (Render provides this via Render PostgreSQL, Railway via Railway PostgreSQL)
+- `DATABASE_URL` environment variable pointing to your PostgreSQL connection string
 
 **Build Command:** `npm run build`
 **Start Command:** `npm start`
@@ -685,20 +710,26 @@ The backend is a standard Node.js + Express application. SQLite works on all maj
 
 **Deployment Steps:**
 1. Set `NODE_ENV=production` in environment
-2. Set `PORT` to the platform's assigned port (Railway/Render provide this automatically via `PORT` env)
-3. Set `CORS_ORIGIN` to your frontend domain(s), comma-separated
-4. Ensure `DATABASE_PATH` points to a persistent volume (for platforms that support it)
-5. For ephemeral filesystems (Render free tier, Fly.io), the SQLite database resets on restart — data is safe since sync is designed to be lossy (clients repush data)
-
-**Railway-specific:**
-- Build: `npm run build`
-- Start: `npm start`
-- Volumes: Not required (data can be restored from any connected client)
+2. Set `PORT` to the platform's assigned port (Render/Railway provide this automatically)
+3. Set `DATABASE_URL` to your PostgreSQL connection string
+4. Set `CORS_ORIGIN` to your frontend domain(s), comma-separated
+5. Enable **Persistent Disk** on Render (or volume on Railway) to ensure the database is always accessible
 
 **Render-specific:**
 - Build Command: `npm install && npm run build`
 - Start Command: `npm start`
-- Disk persistence: Use Render's persistent disk option for SQLite durability
+- **Database**: Create a Render PostgreSQL instance, copy its `Internal Database URL` into the `DATABASE_URL` env var
+- **Persistent Disk**: Attach a persistent disk to the service for data durability across deploys
+- The schema is auto-created on first startup (`CREATE TABLE IF NOT EXISTS`)
+
+**Railway-specific:**
+- Build: `npm run build`
+- Start: `npm start`
+- **Database**: Provision a Railway PostgreSQL plugin, its connection string is auto-injected into `DATABASE_URL`
+- Schema is auto-created on first startup
+
+**Important Note on Data Persistence:**
+Unlike SQLite (which was file-based and lost on ephemeral filesystems), **PostgreSQL is a separate service** — the database and the app run independently. Even if the app restarts or is redeployed, the database retains all data. This is the primary reason for migrating from SQLite.
 
 ### Hosting Frontend (Vercel / Netlify)
 
@@ -730,12 +761,12 @@ Internet
 │  saintlycloud.com   │────▶│  saintlycloud-api   │
 │                     │     │  .com:3721          │
 │  VITE_API_URL =     │     │                     │
-│  https://.../api    │     │  SQLite Database    │
+│  https://.../api    │     │  PostgreSQL Database │
 └─────────────────────┘     └─────────────────────┘
         │                           │
         │                           ▼
-        │                    Persistent Disk
-        │                    (optional for SQLite)
+        │                    Render Persistent
+        │                    Disk (recommended)
         │
    ┌────┴────┐
    │ Desktop │
@@ -947,10 +978,16 @@ Console logs added for all critical operations (secrets are NEVER logged):
 ```bash
 cd saintlycloud/backend
 npm install
-npm run dev
+npm run build
+DATABASE_URL=postgresql://user:pass@localhost:5432/saintlycloud npm start
 # Server starts on http://localhost:3721
-# SQLite database created at saintlycloud.db
 ```
+
+> **Note:** For local development, you need a running PostgreSQL instance. You can use Docker:
+> ```bash
+> docker run -d --name saintlycloud-pg -e POSTGRES_PASSWORD=localdev -e POSTGRES_DB=saintlycloud -p 5432:5432 postgres:16
+> ```
+> Then set `DATABASE_URL=postgresql://postgres:localdev@localhost:5432/saintlycloud`
 
 ### Frontend
 
@@ -969,7 +1006,7 @@ npm run dev
 cd saintlycloud/backend
 npm install
 npm run build
-NODE_ENV=production npm start
+DATABASE_URL=postgresql://... NODE_ENV=production npm start
 
 # Frontend (serve via Vercel)
 cd saintlycloud/frontend
@@ -984,5 +1021,103 @@ VITE_API_URL=https://your-backend.com/api npm run build
 |----------|---------|-------------|
 | `PORT` | `3721` | Backend server port |
 | `NODE_ENV` | `development` | Set to `production` for deployment |
-| `DATABASE_PATH` | `./saintlycloud.db` | SQLite database file path (alias: `DB_PATH`). **Set to a persistent volume path in production** |
+| `DATABASE_URL` | **(required)** | PostgreSQL connection string |
 | `CORS_ORIGIN` | `http://localhost:5174,http://localhost:4173,http://localhost:3721` | Comma-separated allowed CORS origins |
+
+---
+
+## POSTGRESQL MIGRATION
+
+### Why PostgreSQL?
+
+The migration from SQLite to PostgreSQL was driven by a single critical requirement: **data persistence across deployments**.
+
+| Concern | SQLite | PostgreSQL |
+|---------|--------|------------|
+| **Storage** | File-based (`./saintlycloud.db`) | Server-based (separate process) |
+| **Persistence** | Lost on ephemeral filesystems | Survives app restarts/deploys |
+| **Concurrent access** | Single-writer (file lock) | Multi-writer (connection pool) |
+| **Deployment** | Requires persistent volume config | Just a connection string |
+| **Backup** | Manual file copy | Built-in (pg_dump, replication) |
+
+### Migration Changes
+
+#### 1. Dependency Swap
+- **Removed:** `better-sqlite3`, `@types/better-sqlite3`
+- **Added:** `pg`, `@types/pg`, `bcrypt`, `@types/bcrypt`
+
+#### 2. Schema Consolidation (5 tables → 1 table)
+
+SQLite schema (old):
+```
+users, devices, user_data, recovery_codes, oauth_tokens
+```
+
+PostgreSQL schema (new):
+```
+users (id, cloud_id, secret, data JSONB, created_at)
+```
+
+All user-associated data is stored in the JSONB `data` column, eliminating JOINs and ensuring atomic writes.
+
+#### 3. Credential Hashing
+
+- **Old:** `crypto.scryptSync()` with custom salt extraction and `timingSafeEqual`
+- **New:** `bcrypt.hash()` (cost factor 10) with built-in salt + constant-time comparison
+
+bcrypt was chosen because:
+- Industry standard for password hashing
+- Built-in salt generation and storage
+- Automatic constant-time comparison via `bcrypt.compare()`
+- Well-audited and widely deployed
+
+#### 4. Async Database Access
+
+- **Old:** Synchronous (better-sqlite3)
+- **New:** Async (pg with connection pool)
+
+All route handlers are now `async`. Queries use parameterized placeholders (`$1`, `$2`) to prevent SQL injection.
+
+#### 5. Connection Management
+
+```typescript
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+  max: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000,
+});
+```
+
+- **SSL enabled** (required by most cloud PostgreSQL providers)
+- **Connection pool** of 10 connections for concurrent request handling
+- **30s idle timeout** for efficient resource usage
+- **10s connection timeout** for fast failure detection
+
+#### 6. Schema Auto-Creation
+
+On first startup, `initSchema()` creates the `users` table if it doesn't exist:
+
+```sql
+CREATE TABLE IF NOT EXISTS users (
+  id SERIAL PRIMARY KEY,
+  cloud_id TEXT UNIQUE NOT NULL,
+  secret TEXT NOT NULL,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+The `CREATE TABLE IF NOT EXISTS` ensures the schema is created on fresh databases but is a no-op on existing ones.
+
+### Rollback Plan
+
+If PostgreSQL is unavailable or the migration needs to be reverted:
+
+1. Revert `db.ts` to the SQLite version
+2. Run `npm install better-sqlite3 @types/better-sqlite3`
+3. Remove `pg` and `bcrypt`
+4. Restore the old `routes/` and `index.ts` files
+5. Set `DATABASE_PATH` to the old SQLite file path
+6. The old API is wire-compatible — no frontend changes needed

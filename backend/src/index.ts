@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
-import { initSchema, getDbPath } from './db.js';
+import { initSchema, getDbStatus } from './db.js';
 import { authRouter } from './routes/auth.js';
 import { syncRouter } from './routes/sync.js';
 import { devicesRouter } from './routes/devices.js';
@@ -54,9 +54,17 @@ if (IS_DEV) {
   });
 }
 
-initSchema();
-console.log(`[DB] Schema initialized — all tables ready`);
-console.log(`[DB] Database location: ${getDbPath()}`);
+// Async startup
+(async () => {
+  try {
+    await initSchema();
+    const status = await getDbStatus();
+    console.log(`[DB] PostgreSQL connected — ${status.userCount} users in database`);
+  } catch (err: any) {
+    console.error(`[DB] Failed to initialize database: ${err.message}`);
+    process.exit(1);
+  }
+})();
 
 app.get('/health', (_req, res) => {
   res.json({
@@ -66,15 +74,17 @@ app.get('/health', (_req, res) => {
   });
 });
 
-app.get('/api/health', (_req, res) => {
+app.get('/api/health', async (_req, res) => {
+  const status = await getDbStatus();
   res.json({
     success: true,
-    status: 'ok',
+    status: status.connected ? 'ok' : 'degraded',
     service: 'saintlycloud',
-    version: '1.1.0',
+    version: '1.2.0',
     uptime: Math.floor((Date.now() - startTime) / 1000),
     environment: IS_DEV ? 'development' : 'production',
-    database: getDbPath(),
+    database: 'postgresql',
+    userCount: status.userCount,
     timestamp: new Date().toISOString(),
   });
 });
@@ -90,5 +100,5 @@ app.use((err: any, _req: any, res: any, _next: any) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`SaintlyCloud v1.1.0 running on port ${PORT} [${IS_DEV ? 'development' : 'production'}]`);
+  console.log(`SaintlyCloud v1.2.0 running on port ${PORT} [${IS_DEV ? 'development' : 'production'}]`);
 });

@@ -50,9 +50,18 @@ if (IS_DEV) {
         next();
     });
 }
-(0, db_js_1.initSchema)();
-console.log(`[DB] Schema initialized — all tables ready`);
-console.log(`[DB] Database location: ${(0, db_js_1.getDbPath)()}`);
+// Async startup
+(async () => {
+    try {
+        await (0, db_js_1.initSchema)();
+        const status = await (0, db_js_1.getDbStatus)();
+        console.log(`[DB] PostgreSQL connected — ${status.userCount} users in database`);
+    }
+    catch (err) {
+        console.error(`[DB] Failed to initialize database: ${err.message}`);
+        process.exit(1);
+    }
+})();
 app.get('/health', (_req, res) => {
     res.json({
         status: 'ok',
@@ -60,15 +69,17 @@ app.get('/health', (_req, res) => {
         timestamp: new Date().toISOString(),
     });
 });
-app.get('/api/health', (_req, res) => {
+app.get('/api/health', async (_req, res) => {
+    const status = await (0, db_js_1.getDbStatus)();
     res.json({
         success: true,
-        status: 'ok',
+        status: status.connected ? 'ok' : 'degraded',
         service: 'saintlycloud',
-        version: '1.1.0',
+        version: '1.2.0',
         uptime: Math.floor((Date.now() - startTime) / 1000),
         environment: IS_DEV ? 'development' : 'production',
-        database: (0, db_js_1.getDbPath)(),
+        database: 'postgresql',
+        userCount: status.userCount,
         timestamp: new Date().toISOString(),
     });
 });
@@ -81,5 +92,5 @@ app.use((err, _req, res, _next) => {
     res.status(500).json({ success: false, error: 'Internal server error' });
 });
 app.listen(PORT, () => {
-    console.log(`SaintlyCloud v1.1.0 running on port ${PORT} [${IS_DEV ? 'development' : 'production'}]`);
+    console.log(`SaintlyCloud v1.2.0 running on port ${PORT} [${IS_DEV ? 'development' : 'production'}]`);
 });

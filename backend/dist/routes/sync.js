@@ -10,7 +10,7 @@ function ok(res, data) {
 function fail(res, status, error, details) {
     return res.status(status).json({ success: false, error, details });
 }
-exports.syncRouter.post('/sync/push', (req, res) => {
+exports.syncRouter.post('/sync/push', async (req, res) => {
     try {
         const { cloudId, secret, data } = req.body;
         const normalizedCloudId = typeof cloudId === 'string' ? cloudId.trim().toUpperCase() : cloudId;
@@ -25,7 +25,7 @@ exports.syncRouter.post('/sync/push', (req, res) => {
         if (!data || typeof data !== 'object' || Array.isArray(data)) {
             return fail(res, 400, 'data must be a JSON object with optional bookmarks, history, profile fields');
         }
-        if (!(0, db_js_1.validateCredentials)(normalizedCloudId, normalizedSecret)) {
+        if (!(await (0, db_js_1.validateCredentials)(normalizedCloudId, normalizedSecret))) {
             return fail(res, 401, 'Invalid credentials');
         }
         if (data.bookmarks !== undefined) {
@@ -51,12 +51,12 @@ exports.syncRouter.post('/sync/push', (req, res) => {
             }
             console.log(`[Sync/Push] profile: included`);
         }
-        const success = (0, db_js_1.pushData)(normalizedCloudId, data);
+        const success = await (0, db_js_1.pushData)(normalizedCloudId, data);
         if (!success) {
             return fail(res, 404, 'Account not found');
         }
         const deviceId = req.headers['x-device-id'];
-        (0, db_js_1.updateDeviceActivity)(normalizedCloudId, deviceId);
+        await (0, db_js_1.updateDeviceActivity)(normalizedCloudId, deviceId);
         console.log(`[Sync/Push] Completed for ${normalizedCloudId}`);
         return ok(res, {});
     }
@@ -65,7 +65,7 @@ exports.syncRouter.post('/sync/push', (req, res) => {
         return fail(res, 500, 'Sync push failed', err.message);
     }
 });
-exports.syncRouter.get('/sync/pull', (req, res) => {
+exports.syncRouter.get('/sync/pull', async (req, res) => {
     try {
         const cloudIdRaw = req.query.cloudId;
         const secretRaw = req.headers['x-secret'];
@@ -78,15 +78,15 @@ exports.syncRouter.get('/sync/pull', (req, res) => {
         if (!secret || typeof secret !== 'string') {
             return fail(res, 400, 'x-secret header is required');
         }
-        if (!(0, db_js_1.validateCredentials)(cloudId, secret)) {
+        if (!(await (0, db_js_1.validateCredentials)(cloudId, secret))) {
             return fail(res, 401, 'Invalid credentials');
         }
-        const data = (0, db_js_1.pullData)(cloudId);
+        const data = await (0, db_js_1.pullData)(cloudId);
         if (!data) {
             return fail(res, 404, 'No data found');
         }
         const deviceId = req.headers['x-device-id'];
-        (0, db_js_1.updateDeviceActivity)(cloudId, deviceId);
+        await (0, db_js_1.updateDeviceActivity)(cloudId, deviceId);
         return ok(res, {
             bookmarks: data.bookmarks,
             history: data.history,

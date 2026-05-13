@@ -10,7 +10,7 @@ function ok(res, data) {
 function fail(res, status, error, details) {
     return res.status(status).json({ success: false, error, details });
 }
-exports.authRouter.post('/create-account', (req, res) => {
+exports.authRouter.post('/create-account', async (req, res) => {
     try {
         const { deviceId, secret, deviceName } = req.body;
         const normalizedDeviceId = typeof deviceId === 'string' ? deviceId.trim() : deviceId;
@@ -28,8 +28,8 @@ exports.authRouter.post('/create-account', (req, res) => {
         if (normalizedSecret.length > 256) {
             return fail(res, 400, 'Secret must be at most 256 characters');
         }
-        const { cloudId, recoveryCode } = (0, db_js_1.createUser)(normalizedSecret);
-        (0, db_js_1.linkDevice)(cloudId, normalizedDeviceId, typeof deviceName === 'string' ? deviceName.trim().slice(0, 100) : undefined);
+        const { cloudId, recoveryCode } = await (0, db_js_1.createUser)(normalizedSecret);
+        await (0, db_js_1.linkDevice)(cloudId, normalizedDeviceId, typeof deviceName === 'string' ? deviceName.trim().slice(0, 100) : undefined);
         console.log(`[Auth/Create] Success: ${cloudId}`);
         return ok(res, { cloudId, recoveryCode });
     }
@@ -38,7 +38,7 @@ exports.authRouter.post('/create-account', (req, res) => {
         return fail(res, 500, 'Failed to create account', err.message);
     }
 });
-exports.authRouter.post('/link-device', (req, res) => {
+exports.authRouter.post('/link-device', async (req, res) => {
     try {
         const { cloudId, secret, deviceId, deviceName } = req.body;
         const normalizedCloudId = typeof cloudId === 'string' ? cloudId.trim().toUpperCase() : cloudId;
@@ -54,10 +54,10 @@ exports.authRouter.post('/link-device', (req, res) => {
         if (!normalizedDeviceId || typeof normalizedDeviceId !== 'string') {
             return fail(res, 400, 'deviceId is required and must be a string');
         }
-        if (!(0, db_js_1.validateCredentials)(normalizedCloudId, normalizedSecret)) {
+        if (!(await (0, db_js_1.validateCredentials)(normalizedCloudId, normalizedSecret))) {
             return fail(res, 401, 'Invalid credentials');
         }
-        (0, db_js_1.linkDevice)(normalizedCloudId, normalizedDeviceId, typeof deviceName === 'string' ? deviceName.trim().slice(0, 100) : undefined);
+        await (0, db_js_1.linkDevice)(normalizedCloudId, normalizedDeviceId, typeof deviceName === 'string' ? deviceName.trim().slice(0, 100) : undefined);
         console.log(`[Auth/LinkDevice] Success: ${normalizedDeviceId} -> ${normalizedCloudId}`);
         return ok(res, { cloudId: normalizedCloudId });
     }
@@ -66,7 +66,7 @@ exports.authRouter.post('/link-device', (req, res) => {
         return fail(res, 500, 'Failed to link device', err.message);
     }
 });
-exports.authRouter.post('/validate', (req, res) => {
+exports.authRouter.post('/validate', async (req, res) => {
     try {
         const { cloudId, secret } = req.body;
         const normalizedCloudId = typeof cloudId === 'string' ? cloudId.trim().toUpperCase() : cloudId;
@@ -78,12 +78,12 @@ exports.authRouter.post('/validate', (req, res) => {
         if (!normalizedSecret || typeof normalizedSecret !== 'string') {
             return fail(res, 400, 'secret is required');
         }
-        const valid = (0, db_js_1.validateCredentials)(normalizedCloudId, normalizedSecret);
+        const valid = await (0, db_js_1.validateCredentials)(normalizedCloudId, normalizedSecret);
         if (!valid) {
             console.log(`[Auth/Validate] FAILED for ${normalizedCloudId}`);
             return fail(res, 401, 'Invalid credentials');
         }
-        const info = (0, db_js_1.getAccountInfo)(normalizedCloudId);
+        const info = await (0, db_js_1.getAccountInfo)(normalizedCloudId);
         console.log(`[Auth/Validate] PASS for ${normalizedCloudId}`);
         return ok(res, { cloudId: info?.cloudId, createdAt: info?.createdAt });
     }
@@ -92,7 +92,7 @@ exports.authRouter.post('/validate', (req, res) => {
         return fail(res, 500, 'Validation failed', err.message);
     }
 });
-exports.authRouter.post('/recover', (req, res) => {
+exports.authRouter.post('/recover', async (req, res) => {
     try {
         const { recoveryCode, newSecret } = req.body;
         const normalizedRecovery = typeof recoveryCode === 'string' ? recoveryCode.trim() : recoveryCode;
@@ -109,7 +109,7 @@ exports.authRouter.post('/recover', (req, res) => {
         if (normalizedNewSecret.length > 256) {
             return fail(res, 400, 'New secret must be at most 256 characters');
         }
-        const result = (0, db_js_1.recoverAccount)(normalizedRecovery, normalizedNewSecret);
+        const result = await (0, db_js_1.recoverAccount)(normalizedRecovery, normalizedNewSecret);
         if (!result) {
             return fail(res, 404, 'Invalid recovery code');
         }
@@ -119,7 +119,7 @@ exports.authRouter.post('/recover', (req, res) => {
         return fail(res, 500, 'Recovery failed', err.message);
     }
 });
-exports.authRouter.post('/regenerate', (req, res) => {
+exports.authRouter.post('/regenerate', async (req, res) => {
     try {
         const { cloudId, oldSecret, newSecret } = req.body;
         const normalizedCloudId = typeof cloudId === 'string' ? cloudId.trim().toUpperCase() : cloudId;
@@ -140,7 +140,7 @@ exports.authRouter.post('/regenerate', (req, res) => {
         if (normalizedNewSecret.length > 256) {
             return fail(res, 400, 'New secret must be at most 256 characters');
         }
-        const success = (0, db_js_1.regenerateCredentials)(normalizedCloudId, normalizedOldSecret, normalizedNewSecret);
+        const success = await (0, db_js_1.regenerateCredentials)(normalizedCloudId, normalizedOldSecret, normalizedNewSecret);
         if (!success) {
             return fail(res, 401, 'Invalid credentials');
         }
@@ -150,7 +150,7 @@ exports.authRouter.post('/regenerate', (req, res) => {
         return fail(res, 500, 'Regeneration failed', err.message);
     }
 });
-exports.authRouter.get('/account/:cloudId', (req, res) => {
+exports.authRouter.get('/account/:cloudId', async (req, res) => {
     try {
         const cloudIdRaw = req.params.cloudId;
         const secretRaw = req.headers['x-secret'];
@@ -162,10 +162,10 @@ exports.authRouter.get('/account/:cloudId', (req, res) => {
         if (!secret || typeof secret !== 'string') {
             return fail(res, 400, 'x-secret header is required');
         }
-        if (!(0, db_js_1.validateCredentials)(cloudId, secret)) {
+        if (!(await (0, db_js_1.validateCredentials)(cloudId, secret))) {
             return fail(res, 401, 'Invalid credentials');
         }
-        const info = (0, db_js_1.getAccountInfo)(cloudId);
+        const info = await (0, db_js_1.getAccountInfo)(cloudId);
         if (!info)
             return fail(res, 404, 'Account not found');
         return ok(res, { cloudId: info.cloudId, createdAt: info.createdAt });
@@ -174,7 +174,7 @@ exports.authRouter.get('/account/:cloudId', (req, res) => {
         return fail(res, 500, 'Failed to get account info', err.message);
     }
 });
-exports.authRouter.get('/recovery-code/:cloudId', (req, res) => {
+exports.authRouter.get('/recovery-code/:cloudId', async (req, res) => {
     try {
         const cloudIdRaw = req.params.cloudId;
         const secretRaw = req.headers['x-secret'];
@@ -186,10 +186,10 @@ exports.authRouter.get('/recovery-code/:cloudId', (req, res) => {
         if (!secret || typeof secret !== 'string') {
             return fail(res, 400, 'x-secret header is required');
         }
-        if (!(0, db_js_1.validateCredentials)(cloudId, secret)) {
+        if (!(await (0, db_js_1.validateCredentials)(cloudId, secret))) {
             return fail(res, 401, 'Invalid credentials');
         }
-        const code = (0, db_js_1.getRecoveryCodeByCloudId)(cloudId);
+        const code = await (0, db_js_1.getRecoveryCodeByCloudId)(cloudId);
         if (!code)
             return fail(res, 404, 'Recovery code not found');
         return ok(res, { code });

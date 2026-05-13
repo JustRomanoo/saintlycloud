@@ -1,16 +1,61 @@
-import Database from 'better-sqlite3';
-import { randomBytes, scryptSync, timingSafeEqual } from 'crypto';
-import { resolve } from 'path';
-import { existsSync } from 'fs';
+import { Pool } from 'pg';
+import bcrypt from 'bcrypt';
+import { randomBytes } from 'crypto';
 
-const DB_PATH = resolve(process.env.DATABASE_PATH || process.env.DB_PATH || './saintlycloud.db');
+const DATABASE_URL = process.env.DATABASE_URL;
 
-console.log(`[DB] Database path: ${DB_PATH}`);
-console.log(`[DB] Database file exists: ${existsSync(DB_PATH)}`);
+if (!DATABASE_URL) {
+  console.error('[DB] FATAL: DATABASE_URL environment variable is not set');
+  process.exit(1);
+}
 
-const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+console.log(`[DB] Connecting to PostgreSQL...`);
+
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+  max: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000,
+});
+
+pool.on('error', (err) => {
+  console.error('[DB] Unexpected pool error:', err.message);
+});
+
+export async function initSchema(): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        cloud_id TEXT UNIQUE NOT NULL,
+        secret TEXT NOT NULL,
+        data JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_users_cloud_id ON users(cloud_id);
+    `);
+    console.log(`[DB] Schema initialized — users table ready`);
+  } finally {
+    client.release();
+  }
+}
+
+export async function getDbStatus(): Promise<{ connected: boolean; userCount: number }> {
+  try {
+    const result = await pool.query('SELECT COUNT(*)::int AS count FROM users');
+    return { connected: true, userCount: result.rows[0]?.count || 0 };
+  } catch {
+    return { connected: false, userCount: 0 };
+  }
+}
+
+export function cloudIdPattern(): RegExp {
+  return /^SA-CLD-[A-F0-9]{8}$/;
+}
 
 function normalizeCloudId(cloudId: string): string {
   return (cloudId || '').trim().toUpperCase();
@@ -18,24 +63,6 @@ function normalizeCloudId(cloudId: string): string {
 
 function normalizeSecret(secret: string): string {
   return (secret || '').trim();
-}
-
-function hashSecret(secret: string): string {
-  const salt = randomBytes(16).toString('hex');
-  const hash = scryptSync(secret, salt, 64).toString('hex');
-  return `${salt}:${hash}`;
-}
-
-function verifySecret(secret: string, stored: string): boolean {
-  try {
-    const parts = stored.split(':');
-    if (parts.length !== 2) return false;
-    const [salt, key] = parts;
-    const hash = scryptSync(secret, salt, 64).toString('hex');
-    return hash.length === key.length && timingSafeEqual(Buffer.from(hash), Buffer.from(key));
-  } catch {
-    return false;
-  }
 }
 
 function generateCloudId(): string {
@@ -50,151 +77,226 @@ function generateRecoveryCode(): string {
   return `${seg1}-${seg2}-${seg3}`;
 }
 
-export function initSchema() {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      cloudId TEXT PRIMARY KEY,
-      secret TEXT NOT NULL,
-      createdAt TEXT NOT NULL DEFAULT (datetime('now'))
-    );
+// ── Users ──
 
-    CREATE TABLE IF NOT EXISTS devices (
-      deviceId TEXT PRIMARY KEY,
-      cloudId TEXT NOT NULL REFERENCES users(cloudId) ON DELETE CASCADE,
-      name TEXT NOT NULL DEFAULT 'Unknown Device',
-      lastActive TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS user_data (
-      cloudId TEXT PRIMARY KEY REFERENCES users(cloudId) ON DELETE CASCADE,
-      bookmarks TEXT NOT NULL DEFAULT '[]',
-      history TEXT NOT NULL DEFAULT '[]',
-      profile TEXT NOT NULL DEFAULT '{}',
-      updatedAt TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS recovery_codes (
-      cloudId TEXT PRIMARY KEY REFERENCES users(cloudId) ON DELETE CASCADE,
-      code TEXT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_devices_cloudId ON devices(cloudId);
-    CREATE INDEX IF NOT EXISTS idx_devices_deviceId ON devices(deviceId);
-    CREATE INDEX IF NOT EXISTS idx_users_cloudId ON users(cloudId);
-    CREATE INDEX IF NOT EXISTS idx_recovery_code ON recovery_codes(code);
-
-    CREATE TABLE IF NOT EXISTS oauth_tokens (
-      cloudId TEXT PRIMARY KEY REFERENCES users(cloudId) ON DELETE CASCADE,
-      accessToken TEXT NOT NULL,
-      username TEXT NOT NULL,
-      createdAt TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-  `);
-}
-
-export function cloudIdPattern(): RegExp {
-  return /^SA-CLD-[A-F0-9]{8}$/;
-}
-
-export function createUser(secret: string): { cloudId: string; recoveryCode: string } {
+export async function createUser(secret: string): Promise<{ cloudId: string; recoveryCode: string }> {
   const cloudId = generateCloudId();
   const recoveryCode = generateRecoveryCode();
-  const hashed = hashSecret(normalizeSecret(secret));
+  const hashed = await bcrypt.hash(normalizeSecret(secret), 10);
 
-  const insertUser = db.prepare('INSERT INTO users (cloudId, secret) VALUES (?, ?)');
-  const insertData = db.prepare('INSERT INTO user_data (cloudId) VALUES (?)');
-  const insertRecovery = db.prepare('INSERT INTO recovery_codes (cloudId, code) VALUES (?, ?)');
+  const data = {
+    bookmarks: [],
+    history: [],
+    profile: { username: 'Saintly Viewer', avatar: '', banner: '', frame: '', accent: '#8a5fff' },
+    updatedAt: new Date().toISOString(),
+    devices: [],
+    recoveryCode,
+  };
 
-  const tx = db.transaction(() => {
-    insertUser.run(cloudId, hashed);
-    insertData.run(cloudId);
-    insertRecovery.run(cloudId, recoveryCode);
-  });
-  tx();
+  await pool.query(
+    `INSERT INTO users (cloud_id, secret, data) VALUES ($1, $2, $3)`,
+    [cloudId, hashed, JSON.stringify(data)]
+  );
 
   console.log(`[User] Account created: ${cloudId}`);
   return { cloudId, recoveryCode };
 }
 
-export function getDbPath(): string {
-  return DB_PATH;
-}
-
-export function validateCredentials(cloudId: string, secret: string): boolean {
+export async function validateCredentials(cloudId: string, secret: string): Promise<boolean> {
   const normalizedCloudId = normalizeCloudId(cloudId);
   const normalizedSecret = normalizeSecret(secret);
-  const row = db.prepare('SELECT secret FROM users WHERE cloudId = ?').get(normalizedCloudId) as { secret: string } | undefined;
-  if (!row) {
+
+  const result = await pool.query(
+    `SELECT secret FROM users WHERE cloud_id = $1`,
+    [normalizedCloudId]
+  );
+
+  if (result.rows.length === 0) {
     console.log(`[Auth] User not found: ${normalizedCloudId}`);
     return false;
   }
-  const valid = verifySecret(normalizedSecret, row.secret);
+
+  const valid = await bcrypt.compare(normalizedSecret, result.rows[0].secret);
   console.log(`[Auth] Validation result for ${normalizedCloudId}: ${valid ? 'PASS' : 'FAIL'}`);
   return valid;
 }
 
-export function getUserAuthRow(cloudId: string): { secret: string } | undefined {
+export async function getAccountInfo(cloudId: string): Promise<{ cloudId: string; createdAt: string } | undefined> {
   const normalizedCloudId = normalizeCloudId(cloudId);
-  return db.prepare('SELECT secret FROM users WHERE cloudId = ?').get(normalizedCloudId) as { secret: string } | undefined;
+  const result = await pool.query(
+    `SELECT cloud_id, created_at FROM users WHERE cloud_id = $1`,
+    [normalizedCloudId]
+  );
+  if (result.rows.length === 0) return undefined;
+  return { cloudId: result.rows[0].cloud_id, createdAt: result.rows[0].created_at };
 }
 
-export function updateDeviceActivity(cloudId: string, deviceId?: string) {
-  const normalizedCloudId = normalizeCloudId(cloudId);
-  if (deviceId) {
-    db.prepare("UPDATE devices SET lastActive = datetime('now') WHERE deviceId = ? AND cloudId = ?").run(deviceId, normalizedCloudId);
-  } else {
-    db.prepare("UPDATE devices SET lastActive = datetime('now') WHERE cloudId = ?").run(normalizedCloudId);
-  }
+export async function recoverAccount(recoveryCode: string, newSecret: string): Promise<{ cloudId: string } | null> {
+  const result = await pool.query(
+    `SELECT cloud_id, data FROM users WHERE data->>'recoveryCode' = $1`,
+    [recoveryCode]
+  );
+  if (result.rows.length === 0) return null;
+
+  const hashed = await bcrypt.hash(normalizeSecret(newSecret), 10);
+  await pool.query(
+    `UPDATE users SET secret = $1 WHERE cloud_id = $2`,
+    [hashed, result.rows[0].cloud_id]
+  );
+  return { cloudId: result.rows[0].cloud_id };
 }
 
-export function linkDevice(cloudId: string, deviceId: string, deviceName?: string): boolean {
+export async function regenerateCredentials(cloudId: string, oldSecret: string, newSecret: string): Promise<boolean> {
+  const valid = await validateCredentials(cloudId, oldSecret);
+  if (!valid) return false;
+  const hashed = await bcrypt.hash(normalizeSecret(newSecret), 10);
   const normalizedCloudId = normalizeCloudId(cloudId);
-  const exists = db.prepare('SELECT 1 FROM users WHERE cloudId = ?').get(normalizedCloudId);
-  if (!exists) return false;
-
-  db.prepare(`
-    INSERT INTO devices (deviceId, cloudId, name, lastActive)
-    VALUES (?, ?, ?, datetime('now'))
-    ON CONFLICT(deviceId) DO UPDATE SET lastActive = datetime('now'), name = COALESCE(?, name)
-  `).run(deviceId, normalizedCloudId, deviceName || 'Unknown Device', deviceName || null);
+  await pool.query(
+    `UPDATE users SET secret = $1 WHERE cloud_id = $2`,
+    [hashed, normalizedCloudId]
+  );
   return true;
 }
 
-export function getDevices(cloudId: string) {
+export async function getRecoveryCodeByCloudId(cloudId: string): Promise<string | null> {
   const normalizedCloudId = normalizeCloudId(cloudId);
-  return db.prepare('SELECT deviceId, name, lastActive FROM devices WHERE cloudId = ? ORDER BY lastActive DESC').all(normalizedCloudId);
+  const result = await pool.query(
+    `SELECT data FROM users WHERE cloud_id = $1`,
+    [normalizedCloudId]
+  );
+  if (result.rows.length === 0) return null;
+  return result.rows[0].data?.recoveryCode || null;
 }
 
-export function removeDevice(cloudId: string, deviceId: string): boolean {
+// ── Devices ──
+
+export async function linkDevice(cloudId: string, deviceId: string, deviceName?: string): Promise<boolean> {
   const normalizedCloudId = normalizeCloudId(cloudId);
-  const result = db.prepare('DELETE FROM devices WHERE cloudId = ? AND deviceId = ?').run(normalizedCloudId, deviceId);
-  return result.changes > 0;
+  const userResult = await pool.query(
+    `SELECT data FROM users WHERE cloud_id = $1`,
+    [normalizedCloudId]
+  );
+  if (userResult.rows.length === 0) return false;
+
+  const data = userResult.rows[0].data || {};
+  const devices: any[] = data.devices || [];
+  const existingIdx = devices.findIndex((d: any) => d.deviceId === deviceId);
+
+  if (existingIdx >= 0) {
+    devices[existingIdx].lastActive = new Date().toISOString();
+    if (deviceName) devices[existingIdx].name = deviceName;
+  } else {
+    devices.push({
+      deviceId,
+      name: deviceName || 'Unknown Device',
+      lastActive: new Date().toISOString(),
+    });
+  }
+
+  await pool.query(
+    `UPDATE users SET data = jsonb_set(data, '{devices}', $1::jsonb) WHERE cloud_id = $2`,
+    [JSON.stringify(devices), normalizedCloudId]
+  );
+  return true;
 }
 
-export function renameDevice(cloudId: string, deviceId: string, name: string): boolean {
+export async function updateDeviceActivity(cloudId: string, deviceId?: string): Promise<void> {
   const normalizedCloudId = normalizeCloudId(cloudId);
-  const result = db.prepare('UPDATE devices SET name = ? WHERE cloudId = ? AND deviceId = ?').run(name, normalizedCloudId, deviceId);
-  return result.changes > 0;
+  const userResult = await pool.query(
+    `SELECT data FROM users WHERE cloud_id = $1`,
+    [normalizedCloudId]
+  );
+  if (userResult.rows.length === 0) return;
+
+  const data = userResult.rows[0].data || {};
+  const devices: any[] = data.devices || [];
+
+  if (deviceId) {
+    const dev = devices.find((d: any) => d.deviceId === deviceId);
+    if (dev) dev.lastActive = new Date().toISOString();
+  } else {
+    for (const dev of devices) {
+      dev.lastActive = new Date().toISOString();
+    }
+  }
+
+  await pool.query(
+    `UPDATE users SET data = jsonb_set(data, '{devices}', $1::jsonb) WHERE cloud_id = $2`,
+    [JSON.stringify(devices), normalizedCloudId]
+  );
 }
 
-function mergeBookmarks(existing: any[], incoming: any[] | undefined): string {
-  if (incoming === undefined) return JSON.stringify(existing);
+export async function getDevices(cloudId: string): Promise<any[]> {
+  const normalizedCloudId = normalizeCloudId(cloudId);
+  const result = await pool.query(
+    `SELECT data FROM users WHERE cloud_id = $1`,
+    [normalizedCloudId]
+  );
+  if (result.rows.length === 0) return [];
+  const devices: any[] = result.rows[0].data?.devices || [];
+  return devices.sort((a, b) => (b.lastActive || '').localeCompare(a.lastActive || ''));
+}
+
+export async function removeDevice(cloudId: string, deviceId: string): Promise<boolean> {
+  const normalizedCloudId = normalizeCloudId(cloudId);
+  const userResult = await pool.query(
+    `SELECT data FROM users WHERE cloud_id = $1`,
+    [normalizedCloudId]
+  );
+  if (userResult.rows.length === 0) return false;
+
+  const data = userResult.rows[0].data || {};
+  const devices: any[] = (data.devices || []).filter((d: any) => d.deviceId !== deviceId);
+  if (devices.length === (data.devices || []).length) return false;
+
+  await pool.query(
+    `UPDATE users SET data = jsonb_set(data, '{devices}', $1::jsonb) WHERE cloud_id = $2`,
+    [JSON.stringify(devices), normalizedCloudId]
+  );
+  return true;
+}
+
+export async function renameDevice(cloudId: string, deviceId: string, name: string): Promise<boolean> {
+  const normalizedCloudId = normalizeCloudId(cloudId);
+  const userResult = await pool.query(
+    `SELECT data FROM users WHERE cloud_id = $1`,
+    [normalizedCloudId]
+  );
+  if (userResult.rows.length === 0) return false;
+
+  const data = userResult.rows[0].data || {};
+  const devices: any[] = data.devices || [];
+  const dev = devices.find((d: any) => d.deviceId === deviceId);
+  if (!dev) return false;
+
+  dev.name = name;
+  await pool.query(
+    `UPDATE users SET data = jsonb_set(data, '{devices}', $1::jsonb) WHERE cloud_id = $2`,
+    [JSON.stringify(devices), normalizedCloudId]
+  );
+  return true;
+}
+
+// ── Sync (Push / Pull) ──
+
+function mergeBookmarks(existing: any[], incoming: any[] | undefined): any[] {
+  if (incoming === undefined) return existing;
   const map = new Map<string, any>();
   for (const bm of existing) {
     if (bm?.animeId) map.set(bm.animeId, bm);
   }
   for (const bm of incoming) {
     if (!bm?.animeId) continue;
-    const existing_bm = map.get(bm.animeId);
-    if (!existing_bm || (bm.lastWatched || 0) >= (existing_bm.lastWatched || 0)) {
+    const existingBm = map.get(bm.animeId);
+    if (!existingBm || (bm.lastWatched || 0) >= (existingBm.lastWatched || 0)) {
       map.set(bm.animeId, bm);
     }
   }
-  return JSON.stringify(Array.from(map.values()));
+  return Array.from(map.values());
 }
 
-function mergeHistory(existing: any[], incoming: any[] | undefined): string {
-  if (incoming === undefined) return JSON.stringify(existing);
+function mergeHistory(existing: any[], incoming: any[] | undefined): any[] {
+  if (incoming === undefined) return existing;
   const map = new Map<string, any>();
   for (const h of existing) {
     if (h?.animeId) map.set(`${h.animeId}-${h.episode}`, h);
@@ -202,107 +304,88 @@ function mergeHistory(existing: any[], incoming: any[] | undefined): string {
   for (const h of incoming || []) {
     if (!h?.animeId) continue;
     const key = `${h.animeId}-${h.episode}`;
-    const existing_h = map.get(key);
-    if (!existing_h || (h.timestamp || 0) >= (existing_h.timestamp || 0)) {
+    const existingH = map.get(key);
+    if (!existingH || (h.timestamp || 0) >= (existingH.timestamp || 0)) {
       map.set(key, h);
     }
   }
-  return JSON.stringify(Array.from(map.values()));
+  return Array.from(map.values());
 }
 
-export function pushData(cloudId: string, data: { bookmarks?: any; history?: any; profile?: any; updatedAt?: string }): boolean {
+export async function pushData(cloudId: string, incoming: { bookmarks?: any[]; history?: any[]; profile?: any; updatedAt?: string }): Promise<boolean> {
   const normalizedCloudId = normalizeCloudId(cloudId);
-  const existing = db.prepare('SELECT bookmarks, history, profile, updatedAt FROM user_data WHERE cloudId = ?').get(normalizedCloudId) as any;
-  if (!existing) {
+  const result = await pool.query(
+    `SELECT data FROM users WHERE cloud_id = $1`,
+    [normalizedCloudId]
+  );
+  if (result.rows.length === 0) {
     console.log(`[Push] Account not found: ${normalizedCloudId}`);
     return false;
   }
 
-  if (data.updatedAt && existing.updatedAt) {
-    const incoming = new Date(data.updatedAt).getTime();
-    const stored = new Date(existing.updatedAt).getTime();
-    console.log(`[Push] updatedAt check: incoming=${incoming} stored=${stored} diff=${incoming - stored}ms`);
-    if (incoming < stored) {
+  const currentData = result.rows[0].data || {};
+  const storedUpdatedAt = currentData.updatedAt;
+
+  if (incoming.updatedAt && storedUpdatedAt) {
+    const incomingTs = new Date(incoming.updatedAt).getTime();
+    const storedTs = new Date(storedUpdatedAt).getTime();
+    console.log(`[Push] updatedAt check: incoming=${incomingTs} stored=${storedTs} diff=${incomingTs - storedTs}ms`);
+    if (incomingTs < storedTs) {
       console.log(`[Push] Skipping — incoming data is older than stored data`);
       return true;
     }
   }
 
-  const existingBookmarks = safeJsonParse(existing.bookmarks, []);
-  const existingHistory = safeJsonParse(existing.history, []);
+  const existingBookmarks: any[] = currentData.bookmarks || [];
+  const existingHistory: any[] = currentData.history || [];
 
-  const bookmarks = mergeBookmarks(existingBookmarks, data.bookmarks);
-  const history = mergeHistory(existingHistory, data.history);
-  const profile = data.profile !== undefined ? JSON.stringify(data.profile) : existing.profile;
+  currentData.bookmarks = mergeBookmarks(existingBookmarks, incoming.bookmarks);
+  currentData.history = mergeHistory(existingHistory, incoming.history);
+  if (incoming.profile !== undefined) {
+    currentData.profile = incoming.profile;
+  }
+  currentData.updatedAt = new Date().toISOString();
 
-  db.prepare(`
-    UPDATE user_data SET bookmarks = ?, history = ?, profile = ?, updatedAt = datetime('now') WHERE cloudId = ?
-  `).run(bookmarks, history, profile, normalizedCloudId);
+  await pool.query(
+    `UPDATE users SET data = $1::jsonb WHERE cloud_id = $2`,
+    [JSON.stringify(currentData), normalizedCloudId]
+  );
 
   console.log(`[Push] Data updated for ${normalizedCloudId}`);
-  updateDeviceActivity(normalizedCloudId);
+  await updateDeviceActivity(normalizedCloudId);
   return true;
 }
 
-export function pullData(cloudId: string) {
+export async function pullData(cloudId: string): Promise<{
+  bookmarks: any[];
+  history: any[];
+  profile: any;
+  updatedAt: string;
+} | null> {
   const normalizedCloudId = normalizeCloudId(cloudId);
-  const row = db.prepare('SELECT bookmarks, history, profile, updatedAt FROM user_data WHERE cloudId = ?').get(normalizedCloudId) as any;
-  if (!row) {
+  const result = await pool.query(
+    `SELECT data FROM users WHERE cloud_id = $1`,
+    [normalizedCloudId]
+  );
+  if (result.rows.length === 0) {
     console.log(`[Pull] No data found for ${normalizedCloudId}`);
     return null;
   }
 
-  const bookmarks = safeJsonParse(row.bookmarks, []);
-  const history = safeJsonParse(row.history, []);
-  const profile = safeJsonParse(row.profile, {});
+  const data = result.rows[0].data || {};
+  const bookmarks: any[] = data.bookmarks || [];
+  const history: any[] = data.history || [];
+  const profile = data.profile || {};
+  const updatedAt = data.updatedAt || '';
 
   console.log(`[Pull] Data retrieved for ${normalizedCloudId}: bookmarks=${bookmarks.length} history=${history.length}`);
 
-  return {
-    bookmarks,
-    history,
-    profile,
-    updatedAt: row.updatedAt,
-  };
+  return { bookmarks, history, profile, updatedAt };
 }
 
-export function recoverAccount(recoveryCode: string, newSecret: string): { cloudId: string } | null {
-  const row = db.prepare(`
-    SELECT u.cloudId FROM users u JOIN recovery_codes r ON u.cloudId = r.cloudId WHERE r.code = ?
-  `).get(recoveryCode) as { cloudId: string } | undefined;
-  if (!row) return null;
-
-  const hashed = hashSecret(normalizeSecret(newSecret));
-  db.prepare('UPDATE users SET secret = ? WHERE cloudId = ?').run(hashed, row.cloudId);
-  return { cloudId: row.cloudId };
-}
-
-export function getAccountInfo(cloudId: string) {
-  const normalizedCloudId = normalizeCloudId(cloudId);
-  return db.prepare('SELECT cloudId, createdAt FROM users WHERE cloudId = ?').get(normalizedCloudId) as { cloudId: string; createdAt: string } | undefined;
-}
-
-export function regenerateCredentials(cloudId: string, oldSecret: string, newSecret: string): boolean {
-  const normalizedCloudId = normalizeCloudId(cloudId);
-  if (!validateCredentials(normalizedCloudId, oldSecret)) return false;
-  const hashed = hashSecret(normalizeSecret(newSecret));
-  db.prepare('UPDATE users SET secret = ? WHERE cloudId = ?').run(hashed, normalizedCloudId);
-  return true;
-}
-
-export function getRecoveryCodeByCloudId(cloudId: string): string | null {
-  const normalizedCloudId = normalizeCloudId(cloudId);
-  const row = db.prepare('SELECT code FROM recovery_codes WHERE cloudId = ?').get(normalizedCloudId) as { code: string } | undefined;
-  return row?.code || null;
-}
-
-export function isCloudIdTaken(cloudId: string): boolean {
-  const normalizedCloudId = normalizeCloudId(cloudId);
-  return !!db.prepare('SELECT 1 FROM users WHERE cloudId = ?').get(normalizedCloudId);
-}
+// ── OAuth ──
 
 const oauthInitTokens = new Map<string, { cloudId: string; createdAt: number }>();
-
 const OAUTH_INIT_TTL = 5 * 60 * 1000;
 
 export function createOAuthInitToken(cloudId: string): string {
@@ -324,23 +407,20 @@ export function consumeOAuthInitToken(token: string): string | null {
   return entry.cloudId;
 }
 
-export function storeOAuthToken(cloudId: string, accessToken: string, username: string) {
+export async function storeOAuthToken(cloudId: string, accessToken: string, username: string): Promise<void> {
   const normalizedCloudId = normalizeCloudId(cloudId);
-  db.prepare(`
-    INSERT INTO oauth_tokens (cloudId, accessToken, username)
-    VALUES (?, ?, ?)
-    ON CONFLICT(cloudId) DO UPDATE SET accessToken = excluded.accessToken, username = excluded.username
-  `).run(normalizedCloudId, accessToken, username);
+  await pool.query(
+    `UPDATE users SET data = jsonb_set(data, '{oauthToken}', $1::jsonb) WHERE cloud_id = $2`,
+    [JSON.stringify({ accessToken, username }), normalizedCloudId]
+  );
 }
 
-export function getOAuthToken(cloudId: string): { accessToken: string; username: string } | null {
+export async function getOAuthToken(cloudId: string): Promise<{ accessToken: string; username: string } | null> {
   const normalizedCloudId = normalizeCloudId(cloudId);
-  const row = db.prepare('SELECT accessToken, username FROM oauth_tokens WHERE cloudId = ?').get(normalizedCloudId) as any;
-  return row || null;
+  const result = await pool.query(
+    `SELECT data FROM users WHERE cloud_id = $1`,
+    [normalizedCloudId]
+  );
+  if (result.rows.length === 0) return null;
+  return result.rows[0].data?.oauthToken || null;
 }
-
-function safeJsonParse(text: string, fallback: any): any {
-  try { return JSON.parse(text); } catch { return fallback; }
-}
-
-export default db;

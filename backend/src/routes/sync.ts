@@ -11,7 +11,7 @@ function fail(res: any, status: number, error: string, details?: string) {
   return res.status(status).json({ success: false, error, details });
 }
 
-syncRouter.post('/sync/push', (req, res) => {
+syncRouter.post('/sync/push', async (req, res) => {
   try {
     const { cloudId, secret, data } = req.body;
     const normalizedCloudId = typeof cloudId === 'string' ? cloudId.trim().toUpperCase() : cloudId;
@@ -28,7 +28,7 @@ syncRouter.post('/sync/push', (req, res) => {
     if (!data || typeof data !== 'object' || Array.isArray(data)) {
       return fail(res, 400, 'data must be a JSON object with optional bookmarks, history, profile fields');
     }
-    if (!validateCredentials(normalizedCloudId, normalizedSecret)) {
+    if (!(await validateCredentials(normalizedCloudId, normalizedSecret))) {
       return fail(res, 401, 'Invalid credentials');
     }
 
@@ -56,13 +56,13 @@ syncRouter.post('/sync/push', (req, res) => {
       console.log(`[Sync/Push] profile: included`);
     }
 
-    const success = pushData(normalizedCloudId, data);
+    const success = await pushData(normalizedCloudId, data);
     if (!success) {
       return fail(res, 404, 'Account not found');
     }
 
     const deviceId = req.headers['x-device-id'] as string;
-    updateDeviceActivity(normalizedCloudId, deviceId);
+    await updateDeviceActivity(normalizedCloudId, deviceId);
     console.log(`[Sync/Push] Completed for ${normalizedCloudId}`);
     return ok(res, {});
   } catch (err: any) {
@@ -71,7 +71,7 @@ syncRouter.post('/sync/push', (req, res) => {
   }
 });
 
-syncRouter.get('/sync/pull', (req, res) => {
+syncRouter.get('/sync/pull', async (req, res) => {
   try {
     const cloudIdRaw = req.query.cloudId as string;
     const secretRaw = req.headers['x-secret'] as string;
@@ -86,17 +86,17 @@ syncRouter.get('/sync/pull', (req, res) => {
     if (!secret || typeof secret !== 'string') {
       return fail(res, 400, 'x-secret header is required');
     }
-    if (!validateCredentials(cloudId, secret)) {
+    if (!(await validateCredentials(cloudId, secret))) {
       return fail(res, 401, 'Invalid credentials');
     }
 
-    const data = pullData(cloudId);
+    const data = await pullData(cloudId);
     if (!data) {
       return fail(res, 404, 'No data found');
     }
 
     const deviceId = req.headers['x-device-id'] as string;
-    updateDeviceActivity(cloudId, deviceId);
+    await updateDeviceActivity(cloudId, deviceId);
 
     return ok(res, {
       bookmarks: data.bookmarks,

@@ -1,5 +1,8 @@
 import { Router } from 'express';
-import { validateCredentials, storeOAuthToken, getOAuthToken, cloudIdPattern, createOAuthInitToken, consumeOAuthInitToken, pushData } from '../db.js';
+import {
+  validateCredentials, storeOAuthToken, getOAuthToken, cloudIdPattern,
+  createOAuthInitToken, consumeOAuthInitToken, pushData
+} from '../db.js';
 
 export const oauthRouter = Router();
 
@@ -11,7 +14,7 @@ function fail(res: any, status: number, error: string, details?: string) {
   return res.status(status).json({ success: false, error, details });
 }
 
-oauthRouter.post('/oauth/store', (req, res) => {
+oauthRouter.post('/oauth/store', async (req, res) => {
   try {
     const { cloudId, secret, accessToken, username } = req.body;
     const normalizedCloudId = typeof cloudId === 'string' ? cloudId.trim().toUpperCase() : cloudId;
@@ -29,18 +32,18 @@ oauthRouter.post('/oauth/store', (req, res) => {
     if (!username || typeof username !== 'string') {
       return fail(res, 400, 'username is required');
     }
-    if (!validateCredentials(normalizedCloudId, normalizedSecret)) {
+    if (!(await validateCredentials(normalizedCloudId, normalizedSecret))) {
       return fail(res, 401, 'Invalid credentials');
     }
 
-    storeOAuthToken(normalizedCloudId, accessToken, username);
+    await storeOAuthToken(normalizedCloudId, accessToken, username);
     return ok(res, { stored: true });
   } catch (err: any) {
     return fail(res, 500, 'Failed to store OAuth token', err.message);
   }
 });
 
-oauthRouter.get('/oauth/token', (req, res) => {
+oauthRouter.get('/oauth/token', async (req, res) => {
   try {
     const cloudIdRaw = req.query.cloudId as string;
     const secretRaw = req.headers['x-secret'] as string;
@@ -53,11 +56,11 @@ oauthRouter.get('/oauth/token', (req, res) => {
     if (!secret || typeof secret !== 'string') {
       return fail(res, 400, 'x-secret header is required');
     }
-    if (!validateCredentials(cloudId, secret)) {
+    if (!(await validateCredentials(cloudId, secret))) {
       return fail(res, 401, 'Invalid credentials');
     }
 
-    const token = getOAuthToken(cloudId);
+    const token = await getOAuthToken(cloudId);
     if (!token) return fail(res, 404, 'No OAuth token stored');
     return ok(res, token);
   } catch (err: any) {
@@ -65,7 +68,7 @@ oauthRouter.get('/oauth/token', (req, res) => {
   }
 });
 
-oauthRouter.post('/oauth/init', (req, res) => {
+oauthRouter.post('/oauth/init', async (req, res) => {
   try {
     const { cloudId, secret } = req.body;
     const normalizedCloudId = typeof cloudId === 'string' ? cloudId.trim().toUpperCase() : cloudId;
@@ -77,7 +80,7 @@ oauthRouter.post('/oauth/init', (req, res) => {
     if (!normalizedSecret || typeof normalizedSecret !== 'string') {
       return fail(res, 400, 'secret is required');
     }
-    if (!validateCredentials(normalizedCloudId, normalizedSecret)) {
+    if (!(await validateCredentials(normalizedCloudId, normalizedSecret))) {
       return fail(res, 401, 'Invalid credentials');
     }
 
@@ -88,7 +91,7 @@ oauthRouter.post('/oauth/init', (req, res) => {
   }
 });
 
-oauthRouter.post('/oauth/complete', (req, res) => {
+oauthRouter.post('/oauth/complete', async (req, res) => {
   try {
     const { initToken, accessToken, username } = req.body;
 
@@ -107,7 +110,7 @@ oauthRouter.post('/oauth/complete', (req, res) => {
       return fail(res, 401, 'Invalid or expired init token. Please start the OAuth process again from the desktop app.');
     }
 
-    storeOAuthToken(cloudId, accessToken, username);
+    await storeOAuthToken(cloudId, accessToken, username);
     return ok(res, { stored: true, cloudId });
   } catch (err: any) {
     return fail(res, 500, 'Failed to complete OAuth', err.message);
@@ -135,11 +138,11 @@ oauthRouter.post('/oauth/sync', async (req, res) => {
     if (!normalizedSecret || typeof normalizedSecret !== 'string') {
       return fail(res, 400, 'secret is required');
     }
-    if (!validateCredentials(normalizedCloudId, normalizedSecret)) {
+    if (!(await validateCredentials(normalizedCloudId, normalizedSecret))) {
       return fail(res, 401, 'Invalid credentials');
     }
 
-    const token = getOAuthToken(normalizedCloudId);
+    const token = await getOAuthToken(normalizedCloudId);
     if (!token) {
       return fail(res, 404, 'No AniList token found. Connect AniList first.');
     }
@@ -197,7 +200,7 @@ oauthRouter.post('/oauth/sync', async (req, res) => {
       }
     }
 
-    pushData(normalizedCloudId, { bookmarks });
+    await pushData(normalizedCloudId, { bookmarks });
 
     return ok(res, { synced: true, count: bookmarks.length });
   } catch (err: any) {
