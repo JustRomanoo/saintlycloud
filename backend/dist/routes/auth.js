@@ -13,20 +13,22 @@ function fail(res, status, error, details) {
 exports.authRouter.post('/create-account', (req, res) => {
     try {
         const { deviceId, secret, deviceName } = req.body;
-        if (!deviceId || typeof deviceId !== 'string') {
+        const normalizedDeviceId = typeof deviceId === 'string' ? deviceId.trim() : deviceId;
+        const normalizedSecret = typeof secret === 'string' ? secret.trim() : secret;
+        if (!normalizedDeviceId || typeof normalizedDeviceId !== 'string') {
             return fail(res, 400, 'deviceId is required and must be a string');
         }
-        if (!secret || typeof secret !== 'string') {
+        if (!normalizedSecret || typeof normalizedSecret !== 'string') {
             return fail(res, 400, 'secret is required and must be a string');
         }
-        if (secret.length < 8) {
+        if (normalizedSecret.length < 8) {
             return fail(res, 400, 'Secret must be at least 8 characters');
         }
-        if (secret.length > 256) {
+        if (normalizedSecret.length > 256) {
             return fail(res, 400, 'Secret must be at most 256 characters');
         }
-        const { cloudId, recoveryCode } = (0, db_js_1.createUser)(secret);
-        (0, db_js_1.linkDevice)(cloudId, deviceId, typeof deviceName === 'string' ? deviceName.slice(0, 100) : undefined);
+        const { cloudId, recoveryCode } = (0, db_js_1.createUser)(normalizedSecret);
+        (0, db_js_1.linkDevice)(cloudId, normalizedDeviceId, typeof deviceName === 'string' ? deviceName.trim().slice(0, 100) : undefined);
         return ok(res, { cloudId, recoveryCode });
     }
     catch (err) {
@@ -36,20 +38,23 @@ exports.authRouter.post('/create-account', (req, res) => {
 exports.authRouter.post('/link-device', (req, res) => {
     try {
         const { cloudId, secret, deviceId, deviceName } = req.body;
-        if (!cloudId || typeof cloudId !== 'string' || !(0, db_js_1.cloudIdPattern)().test(cloudId)) {
+        const normalizedCloudId = typeof cloudId === 'string' ? cloudId.trim().toUpperCase() : cloudId;
+        const normalizedSecret = typeof secret === 'string' ? secret.trim() : secret;
+        const normalizedDeviceId = typeof deviceId === 'string' ? deviceId.trim() : deviceId;
+        if (!normalizedCloudId || typeof normalizedCloudId !== 'string' || !(0, db_js_1.cloudIdPattern)().test(normalizedCloudId)) {
             return fail(res, 400, 'Valid cloudId is required (format: SA-CLD-XXXXXXXX)');
         }
-        if (!secret || typeof secret !== 'string') {
+        if (!normalizedSecret || typeof normalizedSecret !== 'string') {
             return fail(res, 400, 'secret is required');
         }
-        if (!deviceId || typeof deviceId !== 'string') {
+        if (!normalizedDeviceId || typeof normalizedDeviceId !== 'string') {
             return fail(res, 400, 'deviceId is required and must be a string');
         }
-        if (!(0, db_js_1.validateCredentials)(cloudId, secret)) {
+        if (!(0, db_js_1.validateCredentials)(normalizedCloudId, normalizedSecret)) {
             return fail(res, 401, 'Invalid credentials');
         }
-        (0, db_js_1.linkDevice)(cloudId, deviceId, typeof deviceName === 'string' ? deviceName.slice(0, 100) : undefined);
-        return ok(res, { cloudId });
+        (0, db_js_1.linkDevice)(normalizedCloudId, normalizedDeviceId, typeof deviceName === 'string' ? deviceName.trim().slice(0, 100) : undefined);
+        return ok(res, { cloudId: normalizedCloudId });
     }
     catch (err) {
         return fail(res, 500, 'Failed to link device', err.message);
@@ -58,17 +63,25 @@ exports.authRouter.post('/link-device', (req, res) => {
 exports.authRouter.post('/validate', (req, res) => {
     try {
         const { cloudId, secret } = req.body;
-        if (!cloudId || typeof cloudId !== 'string') {
+        const normalizedCloudId = typeof cloudId === 'string' ? cloudId.trim().toUpperCase() : cloudId;
+        const normalizedSecret = typeof secret === 'string' ? secret.trim() : secret;
+        if (!normalizedCloudId || typeof normalizedCloudId !== 'string' || !(0, db_js_1.cloudIdPattern)().test(normalizedCloudId)) {
             return fail(res, 400, 'cloudId is required');
         }
-        if (!secret || typeof secret !== 'string') {
+        if (!normalizedSecret || typeof normalizedSecret !== 'string') {
             return fail(res, 400, 'secret is required');
         }
-        const valid = (0, db_js_1.validateCredentials)(cloudId, secret);
+        const isDev = process.env.NODE_ENV !== 'production';
+        if (isDev) {
+            const row = (0, db_js_1.getUserAuthRow)(normalizedCloudId);
+            console.log('Validating cloudId:', normalizedCloudId);
+            console.log('User found:', !!row);
+        }
+        const valid = (0, db_js_1.validateCredentials)(normalizedCloudId, normalizedSecret);
         if (!valid) {
             return fail(res, 401, 'Invalid credentials');
         }
-        const info = (0, db_js_1.getAccountInfo)(cloudId);
+        const info = (0, db_js_1.getAccountInfo)(normalizedCloudId);
         return ok(res, { cloudId: info?.cloudId, createdAt: info?.createdAt });
     }
     catch (err) {
@@ -78,19 +91,21 @@ exports.authRouter.post('/validate', (req, res) => {
 exports.authRouter.post('/recover', (req, res) => {
     try {
         const { recoveryCode, newSecret } = req.body;
-        if (!recoveryCode || typeof recoveryCode !== 'string') {
+        const normalizedRecovery = typeof recoveryCode === 'string' ? recoveryCode.trim() : recoveryCode;
+        const normalizedNewSecret = typeof newSecret === 'string' ? newSecret.trim() : newSecret;
+        if (!normalizedRecovery || typeof normalizedRecovery !== 'string') {
             return fail(res, 400, 'recoveryCode is required');
         }
-        if (!newSecret || typeof newSecret !== 'string') {
+        if (!normalizedNewSecret || typeof normalizedNewSecret !== 'string') {
             return fail(res, 400, 'newSecret is required');
         }
-        if (newSecret.length < 8) {
+        if (normalizedNewSecret.length < 8) {
             return fail(res, 400, 'New secret must be at least 8 characters');
         }
-        if (newSecret.length > 256) {
+        if (normalizedNewSecret.length > 256) {
             return fail(res, 400, 'New secret must be at most 256 characters');
         }
-        const result = (0, db_js_1.recoverAccount)(recoveryCode.trim(), newSecret);
+        const result = (0, db_js_1.recoverAccount)(normalizedRecovery, normalizedNewSecret);
         if (!result) {
             return fail(res, 404, 'Invalid recovery code');
         }
@@ -103,22 +118,25 @@ exports.authRouter.post('/recover', (req, res) => {
 exports.authRouter.post('/regenerate', (req, res) => {
     try {
         const { cloudId, oldSecret, newSecret } = req.body;
-        if (!cloudId || typeof cloudId !== 'string') {
+        const normalizedCloudId = typeof cloudId === 'string' ? cloudId.trim().toUpperCase() : cloudId;
+        const normalizedOldSecret = typeof oldSecret === 'string' ? oldSecret.trim() : oldSecret;
+        const normalizedNewSecret = typeof newSecret === 'string' ? newSecret.trim() : newSecret;
+        if (!normalizedCloudId || typeof normalizedCloudId !== 'string' || !(0, db_js_1.cloudIdPattern)().test(normalizedCloudId)) {
             return fail(res, 400, 'cloudId is required');
         }
-        if (!oldSecret || typeof oldSecret !== 'string') {
+        if (!normalizedOldSecret || typeof normalizedOldSecret !== 'string') {
             return fail(res, 400, 'oldSecret is required');
         }
-        if (!newSecret || typeof newSecret !== 'string') {
+        if (!normalizedNewSecret || typeof normalizedNewSecret !== 'string') {
             return fail(res, 400, 'newSecret is required');
         }
-        if (newSecret.length < 8) {
+        if (normalizedNewSecret.length < 8) {
             return fail(res, 400, 'New secret must be at least 8 characters');
         }
-        if (newSecret.length > 256) {
+        if (normalizedNewSecret.length > 256) {
             return fail(res, 400, 'New secret must be at most 256 characters');
         }
-        const success = (0, db_js_1.regenerateCredentials)(cloudId, oldSecret, newSecret);
+        const success = (0, db_js_1.regenerateCredentials)(normalizedCloudId, normalizedOldSecret, normalizedNewSecret);
         if (!success) {
             return fail(res, 401, 'Invalid credentials');
         }
@@ -130,8 +148,10 @@ exports.authRouter.post('/regenerate', (req, res) => {
 });
 exports.authRouter.get('/account/:cloudId', (req, res) => {
     try {
-        const { cloudId } = req.params;
-        const secret = req.headers['x-secret'];
+        const cloudIdRaw = req.params.cloudId;
+        const secretRaw = req.headers['x-secret'];
+        const cloudId = typeof cloudIdRaw === 'string' ? cloudIdRaw.trim().toUpperCase() : cloudIdRaw;
+        const secret = typeof secretRaw === 'string' ? secretRaw.trim() : secretRaw;
         if (!cloudId || !(0, db_js_1.cloudIdPattern)().test(cloudId)) {
             return fail(res, 400, 'Valid cloudId is required (format: SA-CLD-XXXXXXXX)');
         }
@@ -152,8 +172,10 @@ exports.authRouter.get('/account/:cloudId', (req, res) => {
 });
 exports.authRouter.get('/recovery-code/:cloudId', (req, res) => {
     try {
-        const { cloudId } = req.params;
-        const secret = req.headers['x-secret'];
+        const cloudIdRaw = req.params.cloudId;
+        const secretRaw = req.headers['x-secret'];
+        const cloudId = typeof cloudIdRaw === 'string' ? cloudIdRaw.trim().toUpperCase() : cloudIdRaw;
+        const secret = typeof secretRaw === 'string' ? secretRaw.trim() : secretRaw;
         if (!cloudId || !(0, db_js_1.cloudIdPattern)().test(cloudId)) {
             return fail(res, 400, 'Valid cloudId is required (format: SA-CLD-XXXXXXXX)');
         }

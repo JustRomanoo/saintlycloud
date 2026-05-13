@@ -7,6 +7,14 @@ const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
+function normalizeCloudId(cloudId: string): string {
+  return (cloudId || '').trim().toUpperCase();
+}
+
+function normalizeSecret(secret: string): string {
+  return (secret || '').trim();
+}
+
 function hashSecret(secret: string): string {
   const salt = randomBytes(16).toString('hex');
   const hash = scryptSync(secret, salt, 64).toString('hex');
@@ -86,7 +94,7 @@ export function cloudIdPattern(): RegExp {
 export function createUser(secret: string): { cloudId: string; recoveryCode: string } {
   const cloudId = generateCloudId();
   const recoveryCode = generateRecoveryCode();
-  const hashed = hashSecret(secret);
+  const hashed = hashSecret(normalizeSecret(secret));
 
   const insertUser = db.prepare('INSERT INTO users (cloudId, secret) VALUES (?, ?)');
   const insertData = db.prepare('INSERT INTO user_data (cloudId) VALUES (?)');
@@ -103,47 +111,60 @@ export function createUser(secret: string): { cloudId: string; recoveryCode: str
 }
 
 export function validateCredentials(cloudId: string, secret: string): boolean {
-  const row = db.prepare('SELECT secret FROM users WHERE cloudId = ?').get(cloudId) as { secret: string } | undefined;
+  const normalizedCloudId = normalizeCloudId(cloudId);
+  const normalizedSecret = normalizeSecret(secret);
+  const row = db.prepare('SELECT secret FROM users WHERE cloudId = ?').get(normalizedCloudId) as { secret: string } | undefined;
   if (!row) return false;
-  return verifySecret(secret, row.secret);
+  return verifySecret(normalizedSecret, row.secret);
+}
+
+export function getUserAuthRow(cloudId: string): { secret: string } | undefined {
+  const normalizedCloudId = normalizeCloudId(cloudId);
+  return db.prepare('SELECT secret FROM users WHERE cloudId = ?').get(normalizedCloudId) as { secret: string } | undefined;
 }
 
 export function updateDeviceActivity(cloudId: string, deviceId?: string) {
+  const normalizedCloudId = normalizeCloudId(cloudId);
   if (deviceId) {
-    db.prepare("UPDATE devices SET lastActive = datetime('now') WHERE deviceId = ? AND cloudId = ?").run(deviceId, cloudId);
+    db.prepare("UPDATE devices SET lastActive = datetime('now') WHERE deviceId = ? AND cloudId = ?").run(deviceId, normalizedCloudId);
   } else {
-    db.prepare("UPDATE devices SET lastActive = datetime('now') WHERE cloudId = ?").run(cloudId);
+    db.prepare("UPDATE devices SET lastActive = datetime('now') WHERE cloudId = ?").run(normalizedCloudId);
   }
 }
 
 export function linkDevice(cloudId: string, deviceId: string, deviceName?: string): boolean {
-  const exists = db.prepare('SELECT 1 FROM users WHERE cloudId = ?').get(cloudId);
+  const normalizedCloudId = normalizeCloudId(cloudId);
+  const exists = db.prepare('SELECT 1 FROM users WHERE cloudId = ?').get(normalizedCloudId);
   if (!exists) return false;
 
   db.prepare(`
     INSERT INTO devices (deviceId, cloudId, name, lastActive)
     VALUES (?, ?, ?, datetime('now'))
     ON CONFLICT(deviceId) DO UPDATE SET lastActive = datetime('now'), name = COALESCE(?, name)
-  `).run(deviceId, cloudId, deviceName || 'Unknown Device', deviceName || null);
+  `).run(deviceId, normalizedCloudId, deviceName || 'Unknown Device', deviceName || null);
   return true;
 }
 
 export function getDevices(cloudId: string) {
-  return db.prepare('SELECT deviceId, name, lastActive FROM devices WHERE cloudId = ? ORDER BY lastActive DESC').all(cloudId);
+  const normalizedCloudId = normalizeCloudId(cloudId);
+  return db.prepare('SELECT deviceId, name, lastActive FROM devices WHERE cloudId = ? ORDER BY lastActive DESC').all(normalizedCloudId);
 }
 
 export function removeDevice(cloudId: string, deviceId: string): boolean {
-  const result = db.prepare('DELETE FROM devices WHERE cloudId = ? AND deviceId = ?').run(cloudId, deviceId);
+  const normalizedCloudId = normalizeCloudId(cloudId);
+  const result = db.prepare('DELETE FROM devices WHERE cloudId = ? AND deviceId = ?').run(normalizedCloudId, deviceId);
   return result.changes > 0;
 }
 
 export function renameDevice(cloudId: string, deviceId: string, name: string): boolean {
-  const result = db.prepare('UPDATE devices SET name = ? WHERE cloudId = ? AND deviceId = ?').run(name, cloudId, deviceId);
+  const normalizedCloudId = normalizeCloudId(cloudId);
+  const result = db.prepare('UPDATE devices SET name = ? WHERE cloudId = ? AND deviceId = ?').run(name, normalizedCloudId, deviceId);
   return result.changes > 0;
 }
 
 export function pushData(cloudId: string, data: { bookmarks?: any; history?: any; profile?: any; updatedAt?: string }): boolean {
-  const existing = db.prepare('SELECT bookmarks, history, profile, updatedAt FROM user_data WHERE cloudId = ?').get(cloudId) as any;
+  const normalizedCloudId = normalizeCloudId(cloudId);
+  const existing = db.prepare('SELECT bookmarks, history, profile, updatedAt FROM user_data WHERE cloudId = ?').get(normalizedCloudId) as any;
   if (!existing) return false;
 
   if (data.updatedAt && existing.updatedAt) {
@@ -160,14 +181,15 @@ export function pushData(cloudId: string, data: { bookmarks?: any; history?: any
 
   db.prepare(`
     UPDATE user_data SET bookmarks = ?, history = ?, profile = ?, updatedAt = datetime('now') WHERE cloudId = ?
-  `).run(bookmarks, history, profile, cloudId);
+  `).run(bookmarks, history, profile, normalizedCloudId);
 
-  updateDeviceActivity(cloudId);
+  updateDeviceActivity(normalizedCloudId);
   return true;
 }
 
 export function pullData(cloudId: string) {
-  const row = db.prepare('SELECT bookmarks, history, profile, updatedAt FROM user_data WHERE cloudId = ?').get(cloudId) as any;
+  const normalizedCloudId = normalizeCloudId(cloudId);
+  const row = db.prepare('SELECT bookmarks, history, profile, updatedAt FROM user_data WHERE cloudId = ?').get(normalizedCloudId) as any;
   if (!row) return null;
 
   return {
@@ -184,29 +206,33 @@ export function recoverAccount(recoveryCode: string, newSecret: string): { cloud
   `).get(recoveryCode) as { cloudId: string } | undefined;
   if (!row) return null;
 
-  const hashed = hashSecret(newSecret);
+  const hashed = hashSecret(normalizeSecret(newSecret));
   db.prepare('UPDATE users SET secret = ? WHERE cloudId = ?').run(hashed, row.cloudId);
   return { cloudId: row.cloudId };
 }
 
 export function getAccountInfo(cloudId: string) {
-  return db.prepare('SELECT cloudId, createdAt FROM users WHERE cloudId = ?').get(cloudId) as { cloudId: string; createdAt: string } | undefined;
+  const normalizedCloudId = normalizeCloudId(cloudId);
+  return db.prepare('SELECT cloudId, createdAt FROM users WHERE cloudId = ?').get(normalizedCloudId) as { cloudId: string; createdAt: string } | undefined;
 }
 
 export function regenerateCredentials(cloudId: string, oldSecret: string, newSecret: string): boolean {
-  if (!validateCredentials(cloudId, oldSecret)) return false;
-  const hashed = hashSecret(newSecret);
-  db.prepare('UPDATE users SET secret = ? WHERE cloudId = ?').run(hashed, cloudId);
+  const normalizedCloudId = normalizeCloudId(cloudId);
+  if (!validateCredentials(normalizedCloudId, oldSecret)) return false;
+  const hashed = hashSecret(normalizeSecret(newSecret));
+  db.prepare('UPDATE users SET secret = ? WHERE cloudId = ?').run(hashed, normalizedCloudId);
   return true;
 }
 
 export function getRecoveryCodeByCloudId(cloudId: string): string | null {
-  const row = db.prepare('SELECT code FROM recovery_codes WHERE cloudId = ?').get(cloudId) as { code: string } | undefined;
+  const normalizedCloudId = normalizeCloudId(cloudId);
+  const row = db.prepare('SELECT code FROM recovery_codes WHERE cloudId = ?').get(normalizedCloudId) as { code: string } | undefined;
   return row?.code || null;
 }
 
 export function isCloudIdTaken(cloudId: string): boolean {
-  return !!db.prepare('SELECT 1 FROM users WHERE cloudId = ?').get(cloudId);
+  const normalizedCloudId = normalizeCloudId(cloudId);
+  return !!db.prepare('SELECT 1 FROM users WHERE cloudId = ?').get(normalizedCloudId);
 }
 
 const oauthInitTokens = new Map<string, { cloudId: string; createdAt: number }>();
@@ -214,8 +240,9 @@ const oauthInitTokens = new Map<string, { cloudId: string; createdAt: number }>(
 const OAUTH_INIT_TTL = 5 * 60 * 1000;
 
 export function createOAuthInitToken(cloudId: string): string {
+  const normalizedCloudId = normalizeCloudId(cloudId);
   const token = randomBytes(16).toString('hex');
-  oauthInitTokens.set(token, { cloudId, createdAt: Date.now() });
+  oauthInitTokens.set(token, { cloudId: normalizedCloudId, createdAt: Date.now() });
   setTimeout(() => oauthInitTokens.delete(token), OAUTH_INIT_TTL);
   return token;
 }
@@ -232,15 +259,17 @@ export function consumeOAuthInitToken(token: string): string | null {
 }
 
 export function storeOAuthToken(cloudId: string, accessToken: string, username: string) {
+  const normalizedCloudId = normalizeCloudId(cloudId);
   db.prepare(`
     INSERT INTO oauth_tokens (cloudId, accessToken, username)
     VALUES (?, ?, ?)
     ON CONFLICT(cloudId) DO UPDATE SET accessToken = excluded.accessToken, username = excluded.username
-  `).run(cloudId, accessToken, username);
+  `).run(normalizedCloudId, accessToken, username);
 }
 
 export function getOAuthToken(cloudId: string): { accessToken: string; username: string } | null {
-  const row = db.prepare('SELECT accessToken, username FROM oauth_tokens WHERE cloudId = ?').get(cloudId) as any;
+  const normalizedCloudId = normalizeCloudId(cloudId);
+  const row = db.prepare('SELECT accessToken, username FROM oauth_tokens WHERE cloudId = ?').get(normalizedCloudId) as any;
   return row || null;
 }
 

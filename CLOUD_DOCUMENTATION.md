@@ -445,6 +445,32 @@ SaintlyCloud uses a two-part credential system + recovery code:
 - There is no password reset flow without the recovery code
 - Regenerating credentials invalidates the old secret immediately
 
+### Credential Validation Logic
+
+All credential validation follows this consistent flow:
+
+1. **Normalization** — Input is normalized before any hashing or verification:
+   - `cloudId`: trimmed and uppercased via `normalizeCloudId()` (`(input || '').trim().toUpperCase()`)
+   - `secret`: trimmed via `normalizeSecret()` (`(input || '').trim()`)
+   - Normalization happens both in route handlers and in `db.ts` utility functions for defense-in-depth
+
+2. **Hashing** (on create/recover/regenerate):
+   - `hashSecret(secret)` generates a 16-byte random salt (`crypto.randomBytes(16).toString('hex')`)
+   - Produces a 64-byte scrypt hash: `crypto.scryptSync(secret, salt, 64).toString('hex')`
+   - Stored as `salt:hash` format
+
+3. **Verification** (on validate/link-device/sync/devices/oauth):
+   - `verifySecret(secret, stored)` splits stored value by `:` to extract `salt` and `key`
+   - Recomputes hash: `crypto.scryptSync(secret, salt, 64).toString('hex')`
+   - Compares using `crypto.timingSafeEqual` (preceded by length check to avoid allocation errors)
+
+4. **Double normalization** — Both route handlers and DB functions normalize independently, ensuring consistency even if one layer changes
+
+5. **What NOT to do:**
+   - ❌ Never compare raw secret to hashed string
+   - ❌ Never re-hash and compare hashes (must derive hash from input + stored salt)
+   - ❌ Never skip normalization on one path but apply it on another
+
 ---
 
 ## AUTHENTICATION FLOW
@@ -453,21 +479,30 @@ SaintlyCloud uses a two-part credential system + recovery code:
 
 ```
 1. User chooses a secret (min 8 characters)
-2. Frontend calls POST /create-account
-3. Backend generates cloudId + recoveryCode, stores them
-4. Frontend receives cloudId + recoveryCode
-5. User MUST save the recoveryCode (shown once)
-6. User is logged in automatically
+2. Frontend calls POST /create-account  →  body: { deviceId, secret, deviceName }
+3. Backend normalizes secret (trim) and deviceId (trim)
+4. Backend normalizes secret again via normalizeSecret() (trim)
+5. Backend hashes normalized secret with scrypt + random salt → stored as "salt:hash"
+6. Backend generates cloudId + recoveryCode, stores them
+7. Frontend receives cloudId + recoveryCode
+8. User MUST save the recoveryCode (shown once)
+9. User is logged in automatically
 ```
 
 ### Existing Account Flow
 
 ```
 1. User enters cloudId + secret
-2. Frontend calls POST /validate
-3. If valid, session is established
-4. Session stored in sessionStorage
-5. All subsequent API calls include credentials
+2. Frontend calls POST /validate  →  body: { cloudId, secret }
+3. Backend normalizes cloudId (trim + uppercase) and secret (trim) in route handler
+4. Backend normalizes cloudId and secret again via normalizeCloudId() + normalizeSecret()
+5. Backend queries user by normalized cloudId
+6. Backend extracts salt from stored "salt:hash", recomputes hash with input secret
+7. Backend compares computed hash vs stored hash using timingSafeEqual
+8. If match → session established with { success: true, cloudId, createdAt }
+9. If no match → 401 "Invalid credentials"
+10. Session stored in sessionStorage
+11. All subsequent API calls include credentials
 ```
 
 ### Session Management

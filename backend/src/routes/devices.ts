@@ -12,8 +12,10 @@ function fail(res: any, status: number, error: string, details?: string) {
 }
 
 function assertAuth(req: any, res: any): string | null {
-  const cloudId = req.body.cloudId || req.query.cloudId;
-  const secret = req.body.secret || req.headers['x-secret'];
+  const cloudIdRaw = (req.body.cloudId || req.query.cloudId) as any;
+  const secretRaw = (req.body.secret || req.headers['x-secret']) as any;
+  const cloudId = typeof cloudIdRaw === 'string' ? cloudIdRaw.trim().toUpperCase() : cloudIdRaw;
+  const secret = typeof secretRaw === 'string' ? secretRaw.trim() : secretRaw;
   if (!cloudId || typeof cloudId !== 'string' || !cloudIdPattern().test(cloudId)) {
     fail(res, 400, 'Valid cloudId is required (format: SA-CLD-XXXXXXXX)');
     return null;

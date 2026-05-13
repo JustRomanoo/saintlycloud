@@ -13,10 +13,12 @@ function fail(res, status, error, details) {
 exports.oauthRouter.post('/oauth/store', (req, res) => {
     try {
         const { cloudId, secret, accessToken, username } = req.body;
-        if (!cloudId || typeof cloudId !== 'string' || !(0, db_js_1.cloudIdPattern)().test(cloudId)) {
+        const normalizedCloudId = typeof cloudId === 'string' ? cloudId.trim().toUpperCase() : cloudId;
+        const normalizedSecret = typeof secret === 'string' ? secret.trim() : secret;
+        if (!normalizedCloudId || typeof normalizedCloudId !== 'string' || !(0, db_js_1.cloudIdPattern)().test(normalizedCloudId)) {
             return fail(res, 400, 'Valid cloudId is required (format: SA-CLD-XXXXXXXX)');
         }
-        if (!secret || typeof secret !== 'string') {
+        if (!normalizedSecret || typeof normalizedSecret !== 'string') {
             return fail(res, 400, 'secret is required');
         }
         if (!accessToken || typeof accessToken !== 'string') {
@@ -25,10 +27,10 @@ exports.oauthRouter.post('/oauth/store', (req, res) => {
         if (!username || typeof username !== 'string') {
             return fail(res, 400, 'username is required');
         }
-        if (!(0, db_js_1.validateCredentials)(cloudId, secret)) {
+        if (!(0, db_js_1.validateCredentials)(normalizedCloudId, normalizedSecret)) {
             return fail(res, 401, 'Invalid credentials');
         }
-        (0, db_js_1.storeOAuthToken)(cloudId, accessToken, username);
+        (0, db_js_1.storeOAuthToken)(normalizedCloudId, accessToken, username);
         return ok(res, { stored: true });
     }
     catch (err) {
@@ -37,8 +39,10 @@ exports.oauthRouter.post('/oauth/store', (req, res) => {
 });
 exports.oauthRouter.get('/oauth/token', (req, res) => {
     try {
-        const cloudId = req.query.cloudId;
-        const secret = req.headers['x-secret'];
+        const cloudIdRaw = req.query.cloudId;
+        const secretRaw = req.headers['x-secret'];
+        const cloudId = typeof cloudIdRaw === 'string' ? cloudIdRaw.trim().toUpperCase() : cloudIdRaw;
+        const secret = typeof secretRaw === 'string' ? secretRaw.trim() : secretRaw;
         if (!cloudId || typeof cloudId !== 'string' || !(0, db_js_1.cloudIdPattern)().test(cloudId)) {
             return fail(res, 400, 'Valid cloudId is required (format: SA-CLD-XXXXXXXX)');
         }
@@ -60,16 +64,18 @@ exports.oauthRouter.get('/oauth/token', (req, res) => {
 exports.oauthRouter.post('/oauth/init', (req, res) => {
     try {
         const { cloudId, secret } = req.body;
-        if (!cloudId || typeof cloudId !== 'string' || !(0, db_js_1.cloudIdPattern)().test(cloudId)) {
+        const normalizedCloudId = typeof cloudId === 'string' ? cloudId.trim().toUpperCase() : cloudId;
+        const normalizedSecret = typeof secret === 'string' ? secret.trim() : secret;
+        if (!normalizedCloudId || typeof normalizedCloudId !== 'string' || !(0, db_js_1.cloudIdPattern)().test(normalizedCloudId)) {
             return fail(res, 400, 'Valid cloudId is required (format: SA-CLD-XXXXXXXX)');
         }
-        if (!secret || typeof secret !== 'string') {
+        if (!normalizedSecret || typeof normalizedSecret !== 'string') {
             return fail(res, 400, 'secret is required');
         }
-        if (!(0, db_js_1.validateCredentials)(cloudId, secret)) {
+        if (!(0, db_js_1.validateCredentials)(normalizedCloudId, normalizedSecret)) {
             return fail(res, 401, 'Invalid credentials');
         }
-        const initToken = (0, db_js_1.createOAuthInitToken)(cloudId);
+        const initToken = (0, db_js_1.createOAuthInitToken)(normalizedCloudId);
         return ok(res, { initToken });
     }
     catch (err) {

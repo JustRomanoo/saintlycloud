@@ -13,16 +13,18 @@ function fail(res, status, error, details) {
 exports.syncRouter.post('/sync/push', (req, res) => {
     try {
         const { cloudId, secret, data } = req.body;
-        if (!cloudId || typeof cloudId !== 'string' || !(0, db_js_1.cloudIdPattern)().test(cloudId)) {
+        const normalizedCloudId = typeof cloudId === 'string' ? cloudId.trim().toUpperCase() : cloudId;
+        const normalizedSecret = typeof secret === 'string' ? secret.trim() : secret;
+        if (!normalizedCloudId || typeof normalizedCloudId !== 'string' || !(0, db_js_1.cloudIdPattern)().test(normalizedCloudId)) {
             return fail(res, 400, 'Valid cloudId is required (format: SA-CLD-XXXXXXXX)');
         }
-        if (!secret || typeof secret !== 'string') {
+        if (!normalizedSecret || typeof normalizedSecret !== 'string') {
             return fail(res, 400, 'secret is required');
         }
         if (!data || typeof data !== 'object' || Array.isArray(data)) {
             return fail(res, 400, 'data must be a JSON object with optional bookmarks, history, profile fields');
         }
-        if (!(0, db_js_1.validateCredentials)(cloudId, secret)) {
+        if (!(0, db_js_1.validateCredentials)(normalizedCloudId, normalizedSecret)) {
             return fail(res, 401, 'Invalid credentials');
         }
         if (data.bookmarks !== undefined) {
@@ -45,12 +47,12 @@ exports.syncRouter.post('/sync/push', (req, res) => {
                 return fail(res, 400, 'data.profile must be a JSON object');
             }
         }
-        const success = (0, db_js_1.pushData)(cloudId, data);
+        const success = (0, db_js_1.pushData)(normalizedCloudId, data);
         if (!success) {
             return fail(res, 404, 'Account not found');
         }
         const deviceId = req.headers['x-device-id'];
-        (0, db_js_1.updateDeviceActivity)(cloudId, deviceId);
+        (0, db_js_1.updateDeviceActivity)(normalizedCloudId, deviceId);
         return ok(res, {});
     }
     catch (err) {
@@ -59,8 +61,10 @@ exports.syncRouter.post('/sync/push', (req, res) => {
 });
 exports.syncRouter.get('/sync/pull', (req, res) => {
     try {
-        const cloudId = req.query.cloudId;
-        const secret = req.headers['x-secret'];
+        const cloudIdRaw = req.query.cloudId;
+        const secretRaw = req.headers['x-secret'];
+        const cloudId = typeof cloudIdRaw === 'string' ? cloudIdRaw.trim().toUpperCase() : cloudIdRaw;
+        const secret = typeof secretRaw === 'string' ? secretRaw.trim() : secretRaw;
         if (!cloudId || typeof cloudId !== 'string' || !(0, db_js_1.cloudIdPattern)().test(cloudId)) {
             return fail(res, 400, 'Valid cloudId is required (format: SA-CLD-XXXXXXXX)');
         }

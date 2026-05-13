@@ -14,17 +14,19 @@ function fail(res: any, status: number, error: string, details?: string) {
 syncRouter.post('/sync/push', (req, res) => {
   try {
     const { cloudId, secret, data } = req.body;
+    const normalizedCloudId = typeof cloudId === 'string' ? cloudId.trim().toUpperCase() : cloudId;
+    const normalizedSecret = typeof secret === 'string' ? secret.trim() : secret;
 
-    if (!cloudId || typeof cloudId !== 'string' || !cloudIdPattern().test(cloudId)) {
+    if (!normalizedCloudId || typeof normalizedCloudId !== 'string' || !cloudIdPattern().test(normalizedCloudId)) {
       return fail(res, 400, 'Valid cloudId is required (format: SA-CLD-XXXXXXXX)');
     }
-    if (!secret || typeof secret !== 'string') {
+    if (!normalizedSecret || typeof normalizedSecret !== 'string') {
       return fail(res, 400, 'secret is required');
     }
     if (!data || typeof data !== 'object' || Array.isArray(data)) {
       return fail(res, 400, 'data must be a JSON object with optional bookmarks, history, profile fields');
     }
-    if (!validateCredentials(cloudId, secret)) {
+    if (!validateCredentials(normalizedCloudId, normalizedSecret)) {
       return fail(res, 401, 'Invalid credentials');
     }
 
@@ -49,13 +51,13 @@ syncRouter.post('/sync/push', (req, res) => {
       }
     }
 
-    const success = pushData(cloudId, data);
+    const success = pushData(normalizedCloudId, data);
     if (!success) {
       return fail(res, 404, 'Account not found');
     }
 
     const deviceId = req.headers['x-device-id'] as string;
-    updateDeviceActivity(cloudId, deviceId);
+    updateDeviceActivity(normalizedCloudId, deviceId);
     return ok(res, {});
   } catch (err: any) {
     return fail(res, 500, 'Sync push failed', err.message);
@@ -64,8 +66,10 @@ syncRouter.post('/sync/push', (req, res) => {
 
 syncRouter.get('/sync/pull', (req, res) => {
   try {
-    const cloudId = req.query.cloudId as string;
-    const secret = req.headers['x-secret'] as string;
+    const cloudIdRaw = req.query.cloudId as string;
+    const secretRaw = req.headers['x-secret'] as string;
+    const cloudId = typeof cloudIdRaw === 'string' ? cloudIdRaw.trim().toUpperCase() : cloudIdRaw;
+    const secret = typeof secretRaw === 'string' ? secretRaw.trim() : secretRaw;
 
     if (!cloudId || typeof cloudId !== 'string' || !cloudIdPattern().test(cloudId)) {
       return fail(res, 400, 'Valid cloudId is required (format: SA-CLD-XXXXXXXX)');
