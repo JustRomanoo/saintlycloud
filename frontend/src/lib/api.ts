@@ -1,7 +1,7 @@
 function getDefaultApiBase(): string {
   if (typeof window === 'undefined') return '/api';
   if (window.location.hostname === 'localhost') return '/api';
-  return 'https://saintlycloud-production.up.railway.app/api';
+  return 'https://saintlycloud.onrender.com/api';
 }
 
 function normalizeApiBase(input: string): string {
@@ -24,7 +24,7 @@ function getFallbackApiBase(primary: string): string | null {
   if (typeof window === 'undefined') return null;
   if (window.location.hostname === 'localhost') return null;
   if (primary.startsWith('http')) return '/api';
-  return 'https://saintlycloud-production.up.railway.app/api';
+  return 'https://saintlycloud.onrender.com/api';
 }
 
 async function jsonFetch(url: string, options?: RequestInit): Promise<any> {

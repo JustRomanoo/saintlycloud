@@ -18,9 +18,11 @@
 8. [Frontend Pages](#frontend-pages)
 9. [AniList OAuth Endpoints](#anilist-oauth-endpoints)
 10. [Production Deployment](#production-deployment)
-11. [Integration with SaintlyAnime](#integration-with-saintlyanime)
-12. [Security Model](#security-model)
-13. [Setup & Running](#setup--running)
+11. [CORS Configuration](#cors-configuration)
+12. [Railway to Render Migration](#railway-to-render-migration)
+13. [Integration with SaintlyAnime](#integration-with-saintlyanime)
+14. [Security Model](#security-model)
+15. [Setup & Running](#setup--running)
 
 ---
 
@@ -696,12 +698,12 @@ Users can trigger AniList sync manually at any time via the **"Sync AniList"** b
 | `CORS_ORIGIN` | `http://localhost:5174,http://localhost:4173,http://localhost:3721` | Comma-separated allowed CORS origins |
 | `VITE_API_URL` | `/api` | Frontend API base URL (set to backend URL in production) |
 
-### Hosting Backend (Render / Railway / Fly.io)
+### Hosting Backend (Render)
 
 The backend is a standard Node.js + Express application with PostgreSQL.
 
 **Prerequisites:**
-- A PostgreSQL database instance (Render provides this via Render PostgreSQL, Railway via Railway PostgreSQL)
+- A PostgreSQL database instance (Render provides this via Render PostgreSQL)
 - `DATABASE_URL` environment variable pointing to your PostgreSQL connection string
 
 **Build Command:** `npm run build`
@@ -710,10 +712,10 @@ The backend is a standard Node.js + Express application with PostgreSQL.
 
 **Deployment Steps:**
 1. Set `NODE_ENV=production` in environment
-2. Set `PORT` to the platform's assigned port (Render/Railway provide this automatically)
+2. Set `PORT` to the platform's assigned port (Render provides this automatically)
 3. Set `DATABASE_URL` to your PostgreSQL connection string
 4. Set `CORS_ORIGIN` to your frontend domain(s), comma-separated
-5. Enable **Persistent Disk** on Render (or volume on Railway) to ensure the database is always accessible
+5. Enable **Persistent Disk** on Render to ensure the database is always accessible
 
 **Render-specific:**
 - Build Command: `npm install && npm run build`
@@ -721,12 +723,6 @@ The backend is a standard Node.js + Express application with PostgreSQL.
 - **Database**: Create a Render PostgreSQL instance, copy its `Internal Database URL` into the `DATABASE_URL` env var
 - **Persistent Disk**: Attach a persistent disk to the service for data durability across deploys
 - The schema is auto-created on first startup (`CREATE TABLE IF NOT EXISTS`)
-
-**Railway-specific:**
-- Build: `npm run build`
-- Start: `npm start`
-- **Database**: Provision a Railway PostgreSQL plugin, its connection string is auto-injected into `DATABASE_URL`
-- Schema is auto-created on first startup
 
 **Important Note on Data Persistence:**
 Unlike SQLite (which was file-based and lost on ephemeral filesystems), **PostgreSQL is a separate service** — the database and the app run independently. Even if the app restarts or is redeployed, the database retains all data. This is the primary reason for migrating from SQLite.
@@ -757,16 +753,17 @@ Internet
    │
    ▼
 ┌─────────────────────┐     ┌─────────────────────┐
-│  Vercel (Frontend)  │     │  Railway/Render     │
-│  saintlycloud.com   │────▶│  saintlycloud-api   │
-│                     │     │  .com:3721          │
+│  Vercel (Frontend)  │     │  Render (Backend)   │
+│  saintlycloud.com   │────▶│  saintlycloud       │
+│                     │     │  .onrender.com:443  │
 │  VITE_API_URL =     │     │                     │
 │  https://.../api    │     │  PostgreSQL Database │
 └─────────────────────┘     └─────────────────────┘
         │                           │
-        │                           ▼
-        │                    Render Persistent
-        │                    Disk (recommended)
+        │                    ┌──────┘
+        │                    ▼
+        │             Render PostgreSQL
+        │             (persistent storage)
         │
    ┌────┴────┐
    │ Desktop │
@@ -786,6 +783,110 @@ Internet
 | **Trust Proxy** | `app.set('trust proxy', 1)` — active in production for correct IP detection behind reverse proxies |
 | **Logging** | Request logging disabled in production; only error logs emitted |
 | **OAuth Tokens** | Stored in database, scoped to cloudId, require valid credentials to access |
+
+---
+
+## CORS CONFIGURATION
+
+### Why CORS Was Needed
+
+When the frontend (hosted on Vercel at `https://saintlycloud.vercel.app`) makes API requests to the backend (hosted on Render at `https://saintlycloud.onrender.com`), the browser enforces the **Same-Origin Policy**. Since the two origins differ, the backend must explicitly allow cross-origin requests via CORS headers.
+
+Without proper CORS configuration, the browser blocks the response and logs:
+```
+No 'Access-Control-Allow-Origin' header is present on the requested resource
+```
+
+### Allowed Origins
+
+The backend accepts requests from the following origins:
+
+| Origin | Purpose |
+|--------|---------|
+| `https://saintlycloud.vercel.app` | Production frontend (Vercel) |
+| `*.vercel.app` (any subdomain) | Vercel preview deployments for testing |
+| `http://localhost:5174` | Local Vite dev server |
+| `http://localhost:4173` | Local Vite preview |
+| `http://localhost:3721` | Backend self-origin (health checks) |
+| `http://tauri.localhost` | Tauri desktop app |
+| `https://tauri.localhost` | Tauri desktop app (secure) |
+| `tauri://localhost` | Tauri desktop app (protocol) |
+| `https://saintlycloud.onrender.com` | Backend self-origin |
+
+### Configuration
+
+CORS is configured in `backend/src/index.ts`:
+
+```typescript
+const corsOptions: cors.CorsOptions = {
+  origin: (origin, callback) => {
+    if (!origin || origin === 'null' || /* tauri origins */) {
+      callback(null, true);
+    } else if (origin.endsWith('.vercel.app')) {
+      callback(null, true);
+    } else {
+      callback(new Error(`Origin ${origin} not allowed by CORS`));
+    }
+  },
+  credentials: true,
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
+```
+
+- **Dynamic origin check** — the callback allows known origins and any `.vercel.app` subdomain
+- **Preflight handling** — `app.options('*', cors(corsOptions))` responds correctly to browser OPTIONS requests
+- **Credentials** — `credentials: true` allows session cookies/headers to be sent cross-origin
+- **Override** — Set the `CORS_ORIGIN` env var to a comma-separated list of allowed origins for custom deployments
+
+### Testing CORS
+
+```bash
+curl -H "Origin: https://saintlycloud.vercel.app" -H "Access-Control-Request-Method: POST" -X OPTIONS https://saintlycloud.onrender.com/api/validate -v
+```
+
+Expected response headers:
+```
+access-control-allow-origin: https://saintlycloud.vercel.app
+access-control-allow-methods: GET,HEAD,PUT,PATCH,POST,DELETE
+access-control-allow-credentials: true
+```
+
+---
+
+## RAILWAY TO RENDER MIGRATION
+
+### Why Migrate?
+
+The backend was originally deployed on Railway (`saintlycloud-production.up.railway.app`). Railway was causing **502 Bad Gateway** errors due to connectivity issues, and the CORS configuration was not properly handling cross-origin requests from Vercel.
+
+### What Changed
+
+| Aspect | Railway (old) | Render (new) |
+|--------|---------------|--------------|
+| **Backend URL** | `saintlycloud-production.up.railway.app` | `saintlycloud.onrender.com` |
+| **CORS** | Dynamic check without preflight | Dynamic check + explicit `app.options('*', cors())` |
+| **Vercel proxy** | Rewrote `/api/*` to Railway | Rewrites `/api/*` to Render |
+| **Frontend API client** | Hardcoded Railway URL as default | Hardcoded Render URL as default |
+| **SaintlyAnime (desktop)** | Hardcoded Railway PROD_API | Hardcoded Render PROD_API |
+
+### Migration Steps
+
+1. **Update backend CORS** — Added `app.options('*', cors())` for preflight requests, added `.vercel.app` wildcard for preview deployments
+2. **Update Vercel rewrite** — Changed `vercel.json` rewrite destination from Railway to Render
+3. **Update frontend API client** — Changed `getDefaultApiBase()` and `getFallbackApiBase()` fallback URL from Railway to Render
+4. **Update SaintlyAnime desktop** — Changed `PROD_API` constant in `src/data/cloud.ts` from Railway to Render
+5. **Verify** — Check Network tab for no Railway requests, no CORS errors, no 502 errors
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `saintlycloud/backend/src/index.ts` | Added preflight handler, `.vercel.app` wildcard, `credentials: true` |
+| `saintlycloud/frontend/vercel.json` | Rewrite destination → Render |
+| `saintlycloud/frontend/src/lib/api.ts` | Default + fallback API URLs → Render |
+| `SaintlyAnime/src/data/cloud.ts` | PROD_API → Render |
 
 ---
 

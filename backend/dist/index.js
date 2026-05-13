@@ -16,21 +16,27 @@ const PORT = parseInt(process.env.PORT || '3721');
 const IS_DEV = process.env.NODE_ENV !== 'production';
 app.set('trust proxy', 1);
 const defaultOrigins = IS_DEV
-    ? 'http://localhost:5174,http://localhost:4173,http://localhost:3721,http://tauri.localhost,https://tauri.localhost,tauri://localhost,https://saintlycloud.vercel.app'
-    : 'http://tauri.localhost,https://tauri.localhost,tauri://localhost,https://saintlycloud.vercel.app';
+    ? 'http://localhost:5174,http://localhost:4173,http://localhost:3721,http://tauri.localhost,https://tauri.localhost,tauri://localhost,https://saintlycloud.vercel.app,https://saintlycloud.onrender.com'
+    : 'http://tauri.localhost,https://tauri.localhost,tauri://localhost,https://saintlycloud.vercel.app,https://saintlycloud.onrender.com';
 const allowedOrigins = (process.env.CORS_ORIGIN || defaultOrigins)
     .split(',').map(s => s.trim()).filter(Boolean);
-app.use((0, cors_1.default)({
+const corsOptions = {
     origin: (origin, callback) => {
         if (!origin || origin === 'null' || origin.startsWith('tauri://') || origin.startsWith('http://tauri.localhost') || origin.startsWith('https://tauri.localhost') || allowedOrigins.includes(origin)) {
+            callback(null, true);
+        }
+        else if (origin.endsWith('.vercel.app')) {
             callback(null, true);
         }
         else {
             console.warn(`[CORS] Blocked origin: ${origin}`);
             callback(new Error(`Origin ${origin} not allowed by CORS`));
         }
-    }
-}));
+    },
+    credentials: true,
+};
+app.use((0, cors_1.default)(corsOptions));
+app.options('*', (0, cors_1.default)(corsOptions));
 app.use(express_1.default.json({ limit: '10mb' }));
 const authLimiter = (0, express_rate_limit_1.default)({
     windowMs: 60 * 1000,
